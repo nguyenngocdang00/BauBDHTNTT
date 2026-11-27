@@ -41,11 +41,13 @@ HDT đăng nhập bằng mã do admin cấp. Mã ngẫu nhiên 12 ký tự, ch�
 
 Tài khoản admin hiện đăng nhập bằng Google. Không bật đăng nhập Google công khai cho HDT; mã chỉ cấp từ trang quản trị.
 
-## Dữ liệu bầu cử
+## Cấu hình kỳ bầu cử trên giao diện
 
-Tạo `elections/current` với các trường: `name`, `term`, `description`, `status: "closed"`, `activeRound: 1`, `voterCount`, `round1VotedCount: 0`, `round2VotedCount: 0`. Tạo ứng viên tại `elections/current/candidates/{candidateId}` với `name`, `sector`, `active: true`, `electedRound1: false`.
+Admin mở mục **Kỳ bầu cử** để nhập tên kỳ, nhiệm kỳ, mô tả và hạn kết thúc. Nhấn **Lưu cấu hình**, sau đó chọn **Đồng bộ danh sách HDT** để đưa các Huynh trưởng đang hoạt động vào danh sách ứng viên. Có thể loại ứng viên trước khi mở vòng 1.
 
-Sau khi rà soát danh sách, admin có thể mở vòng bằng cách sửa `elections/current` trong Firestore Console. Khi kết thúc vòng 1, chốt 11 người bằng `electedRound1: true`, rồi mở vòng 2. Khi hoàn tất, đóng kỳ bầu cử.
+Khi đã rà soát danh sách, nhấn **Mở vòng 1**. Sau khi đóng vòng 1, admin kiểm tra số phiếu và đánh dấu đúng 11 người trúng cử; nếu hòa ở ranh giới, tổ chức vòng phụ trước khi chốt. Khi đủ 11 người, nhấn **Mở vòng 2**. Đóng vòng khi hết hạn hoặc hoàn tất. Mọi thao tác cấu hình và mở/đóng được lưu vào `elections/current` trên Firestore; danh sách ứng viên lưu trong `elections/current/candidates`.
+
+**Không mở bầu cử thật trên Spark ở phiên bản hiện tại.** Giao diện cấu hình, đồng bộ ứng viên và trạng thái kỳ bầu cử dùng Firestore; việc ghi phiếu vẫn gọi Cloud Function `submitBallot`, cần Blaze để triển khai. Có thể chuẩn bị dữ liệu, nhưng phiếu sẽ không gửi được nếu Function chưa hoạt động.
 
 ## Giới hạn chi phí và triển khai
 
