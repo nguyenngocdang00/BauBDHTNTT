@@ -398,7 +398,7 @@ function App() {
         const data = item.data()
         const colors = ['peach','lavender','blue','mint','sand','pink']
         const initials = data.initials || (data.name || '?').trim().split(/\s+/).slice(-2).map(part => part[0]).join('').toUpperCase()
-        return { id: item.id, ...data, elected: data.electedRound1 === true, initials, color: data.color || colors[index % colors.length], sector: data.sector || '' }
+        return { ...data, id: item.id, elected: data.electedRound1 === true, initials, color: data.color || colors[index % colors.length], sector: data.sector || '' }
       }))
     }, fail))
     if (profile.role === 'admin') {
@@ -441,8 +441,10 @@ function App() {
         const currentElection = electionSnap.data()
         if (currentElection.status !== 'open' || currentElection.activeRound !== round) throw new Error('Vòng bầu cử hiện không mở.')
         if (currentElection.endsAt?.toMillis && currentElection.endsAt.toMillis() <= Date.now()) throw new Error('Đã hết thời gian bỏ phiếu.')
-        const allowedIds = currentElection[`round${round}CandidateIds`] || []
-        if (selected.some(id => !allowedIds.includes(id))) throw new Error('Danh sách ứng viên đã thay đổi. Hãy tải lại trang và chọn lại.')
+        const allowedIds = currentElection[`round${round}CandidateIds`]
+        if (!Array.isArray(allowedIds) || !allowedIds.length || selected.some(id => !allowedIds.includes(id))) {
+          throw new Error(`Vòng ${round} chưa lưu đúng danh sách ứng viên. Admin cần đóng rồi mở lại vòng ${round}; phiếu chưa được ghi.`)
+        }
         transaction.set(ballotRef, {
           round,
           voterId,
