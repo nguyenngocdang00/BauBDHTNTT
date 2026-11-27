@@ -466,7 +466,7 @@ function App() {
         liveTallies.current[`round${targetRound}`] = initial
         if (cancelled) return
         const updateTallies = () => {
-          const totals = {}
+          const totals = {};
           [...directBallots, ...legacyBallots].forEach(ballot => {
             const data = ballot.data()
             if (data.round === targetRound && data.voterId && Array.isArray(data.candidateIds)) new Set(data.candidateIds).forEach(id => { totals[id] = (totals[id] || 0) + 1 })
@@ -684,7 +684,7 @@ function App() {
         getDocs(collection(db, 'elections', 'current', 'candidates')),
         getDocs(collectionGroup(db, 'rounds')),
       ])
-      const totals = {}
+      const totals = {};
       [...ballotSnapshot.docs, ...legacySnapshot.docs].forEach(ballot => {
         const data = ballot.data()
         if (data.round === targetRound && data.voterId && Array.isArray(data.candidateIds)) new Set(data.candidateIds).forEach(id => { totals[id] = (totals[id] || 0) + 1 })
