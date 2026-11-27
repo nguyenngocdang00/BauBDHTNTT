@@ -11,6 +11,12 @@ service cloud.firestore {
     function ballotPath(electionId, ballotId) {
       return /databases/$(database)/documents/elections/$(electionId)/ballots/$(ballotId);
     }
+    function runoffPath(electionId, runoffId) {
+      return /databases/$(database)/documents/elections/$(electionId)/runoffs/$(runoffId);
+    }
+    function runoffBallotPath(electionId, runoffId, voterId) {
+      return /databases/$(database)/documents/elections/$(electionId)/runoffs/$(runoffId)/ballots/$(voterId);
+    }
     function admin() {
       return signedIn() && adminProfileIsActive();
     }
@@ -73,6 +79,47 @@ service cloud.firestore {
           && request.resource.data.round2VotedCount == resource.data.round2VotedCount + 1
           && getAfter(ballotPath(electionId, '2_' + profile.voterId)).data.round == 2
           && getAfter(ballotPath(electionId, '2_' + profile.voterId)).data.voterId == profile.voterId));
+    }
+    function validRunoffBallotCreate(electionId, runoffId, voterId) {
+      let profile = get(userPath(request.auth.uid)).data;
+      let runoff = get(runoffPath(electionId, runoffId)).data;
+      let election = get(/databases/$(database)/documents/elections/$(electionId)).data;
+      let candidateIds = request.resource.data.candidateIds;
+      return electionId == 'current'
+        && activeVoter()
+        && profile.voterId is string
+        && profile.voterId.size() > 0
+        && voterId == profile.voterId
+        && request.resource.data.keys().hasOnly(['voterId', 'voterName', 'candidateIds', 'submittedAt'])
+        && request.resource.data.keys().hasAll(['voterId', 'voterName', 'candidateIds', 'submittedAt'])
+        && request.resource.data.voterId == profile.voterId
+        && request.resource.data.voterName == profile.name
+        && candidateIds is list
+        && candidateIds.size() == runoff.seats
+        && candidateIds.toSet().size() == runoff.seats
+        && candidateIds.hasOnly(runoff.candidateIds)
+        && request.resource.data.submittedAt == request.time
+        && election.status == 'closed'
+        && election.activeRound == 1
+        && runoff.status == 'open'
+        && runoff.endsAt > request.time
+        && getAfter(runoffPath(electionId, runoffId)).data.votedCount == runoff.votedCount + 1;
+    }
+    function validRunoffCounterUpdate(electionId, runoffId) {
+      let profile = get(userPath(request.auth.uid)).data;
+      let affected = request.resource.data.diff(resource.data).affectedKeys();
+      let election = get(/databases/$(database)/documents/elections/$(electionId)).data;
+      return electionId == 'current'
+        && activeVoter()
+        && profile.voterId is string
+        && profile.voterId.size() > 0
+        && election.status == 'closed'
+        && election.activeRound == 1
+        && resource.data.status == 'open'
+        && resource.data.endsAt > request.time
+        && affected.hasOnly(['votedCount'])
+        && request.resource.data.votedCount == resource.data.votedCount + 1
+        && getAfter(runoffBallotPath(electionId, runoffId, profile.voterId)).data.voterId == profile.voterId;
     }
 
     match /users/{uid} {
@@ -184,7 +231,30 @@ service cloud.firestore {
       }
       match /runoffs/{runoffId} {
         allow read: if activeVoter();
-        allow write: if admin();
+        allow create: if admin()
+          && electionId == 'current'
+          && get(/databases/$(database)/documents/elections/$(electionId)).data.status == 'closed'
+          && get(/databases/$(database)/documents/elections/$(electionId)).data.activeRound == 1
+          && request.resource.data.sourceRound == 1
+          && request.resource.data.status == 'open'
+          && request.resource.data.candidateIds is list
+          && request.resource.data.candidateIds.size() >= 2
+          && request.resource.data.seats is int
+          && request.resource.data.seats >= 1
+          && request.resource.data.seats < request.resource.data.candidateIds.size()
+          && request.resource.data.endsAt > request.time;
+        allow update: if admin() || validRunoffCounterUpdate(electionId, runoffId);
+        allow delete: if admin();
+        match /ballots/{voterId} {
+          allow get: if admin() || (activeVoter() && voterId == get(userPath(request.auth.uid)).data.voterId);
+          allow list: if admin();
+          allow create: if validRunoffBallotCreate(electionId, runoffId, voterId);
+          allow update, delete: if false;
+        }
+        match /tallies/{candidateId} {
+          allow read: if activeVoter();
+          allow write: if admin();
+        }
       }
     }
   }

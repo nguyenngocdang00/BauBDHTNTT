@@ -45,7 +45,7 @@ Tài khoản admin hiện đăng nhập bằng Google. Không bật đăng nhậ
 
 Admin mở mục **Kỳ bầu cử** để nhập tên kỳ, nhiệm kỳ, mô tả và hạn kết thúc. Nhấn **Lưu cấu hình**, sau đó chọn **Đồng bộ danh sách HDT** để đưa các Huynh trưởng đang hoạt động vào danh sách ứng viên. Có thể loại ứng viên trước khi mở vòng 1.
 
-Khi đã rà soát danh sách, nhấn **Mở vòng 1**. Sau khi đóng vòng 1, nhấn **Tổng hợp phiếu**, kiểm tra kết quả và đánh dấu đúng 11 người trúng cử; nếu hòa ở ranh giới, tổ chức vòng phụ trước khi chốt. Khi đủ 11 người, nhấn **Mở vòng 2**. Đóng vòng khi hết hạn hoặc hoàn tất rồi tổng hợp kết quả vòng 2. Mọi thao tác cấu hình và mở/đóng được lưu vào `elections/current` trên Firestore; danh sách ứng viên lưu trong `elections/current/candidates`.
+Khi đã rà soát danh sách, nhấn **Mở vòng 1**. Sau khi đóng vòng 1, nhấn **Tổng hợp phiếu**. Nếu hòa ở vị trí thứ 11, phần **Tạo vòng phụ** gợi ý nhóm người hòa theo kết quả hiện có; admin chọn nhóm đồng phiếu, nhập số suất còn thiếu và hạn bỏ phiếu rồi mở đợt phụ. Ví dụ có 7 người chắc suất và 6 người cùng 9 phiếu tranh 4 suất, chọn cả 6 người và nhập 4. HDT bỏ một phiếu phụ riêng; phiếu và bảng điểm vòng 1 không bị sửa. Đóng vòng phụ, kiểm tra số phiếu, chọn đúng số người thắng rồi chốt để cập nhật danh sách 11. Khi đủ 11 người, nhấn **Mở vòng 2**. Đóng vòng khi hết hạn hoặc hoàn tất rồi tổng hợp kết quả vòng 2. Vòng phụ dùng các đường dẫn riêng `elections/current/runoffs/{id}/ballots` và `.../tallies`; cấu hình kỳ bầu cử và dữ liệu ballot/tally vòng 1 không đổi.
 
 ## Giới hạn chi phí và triển khai
 
@@ -56,7 +56,7 @@ Workflow `.github/workflows/deploy.yml` build khi push lên nhánh `main`. Trong
 ## Thể lệ đã xác nhận
 
 - Cả hai vòng: HDT trong Xứ đoàn được bỏ phiếu; được tự bầu cho mình.
-- Vòng 1 bầu 11 người. Nếu hòa ở vị trí thứ 11, mở vòng phụ giữa những người đồng phiếu.
+- Vòng 1 bầu 11 người. Nếu hòa ở vị trí thứ 11, admin mở vòng phụ giữa toàn bộ người đồng phiếu để chọn số suất còn thiếu; phiếu vòng 1 được giữ nguyên.
 - Vòng 2 bầu 5 người trong danh sách 11. Nếu hòa ở vị trí thứ 5, mở vòng phụ giữa những người đồng phiếu.
 - 5 người Ban Thường vụ nhận các chức vụ Trưởng đoàn, hai Phó đoàn, Thư ký, Thủ quỹ. 6 thành viên còn lại được Ban Thường vụ phân công 5 trưởng ngành và Ủy viên Truyền thông.
 - Công bố đầy đủ số phiếu chi tiết; danh tính cử tri và điều chỉnh trạng thái dành cho admin đoàn.
