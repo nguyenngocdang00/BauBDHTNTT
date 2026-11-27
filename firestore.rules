@@ -155,6 +155,12 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Read-only compatibility for ballots written by the earlier Cloud Function path.
+    match /{path=**}/rounds/{roundId} {
+      allow read: if admin();
+      allow write: if false;
+    }
+
     match /elections/{electionId} {
       allow read: if activeVoter();
       allow create, delete: if admin();
