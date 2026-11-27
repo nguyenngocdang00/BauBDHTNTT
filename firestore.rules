@@ -2,7 +2,12 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
+    function anonymousUser() {
+      return signedIn() && request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
     function userPath(uid) { return /databases/$(database)/documents/users/$(uid); }
+    function voterPath(voterId) { return /databases/$(database)/documents/voterRoster/$(voterId); }
+    function codePath(codeHash) { return /databases/$(database)/documents/loginCodes/$(codeHash); }
     function admin() {
       return signedIn() && exists(userPath(request.auth.uid))
         && get(userPath(request.auth.uid)).data.active == true
@@ -10,78 +15,90 @@ service cloud.firestore {
     }
     function activeVoter() {
       return signedIn() && exists(userPath(request.auth.uid))
-        && get(userPath(request.auth.uid)).data.active == true;
+        && get(userPath(request.auth.uid)).data.active == true
+        && get(userPath(request.auth.uid)).data.role in ['admin', 'voter'];
     }
     function validSector(sector) {
       return sector in ['Ngành Chiên', 'Ngành Ấu', 'Ngành Thiếu', 'Ngành Nghĩa', 'Ngành Hiệp', 'Ban Điều hành', 'Khác'];
     }
-    function rosterPath(email) { return /databases/$(database)/documents/approvedVoters/$(email); }
 
     match /users/{uid} {
       allow read: if admin() || (signedIn() && request.auth.uid == uid);
-      allow create: if (
-        signedIn()
+      allow create: if anonymousUser()
         && request.auth.uid == uid
-        && request.auth.token.email_verified == true
-        && request.resource.data.keys().hasOnly(['name', 'email', 'sector', 'birthDate', 'active', 'role', 'createdAt'])
-        && request.resource.data.keys().hasAll(['name', 'email', 'sector', 'birthDate', 'active', 'role', 'createdAt'])
-        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.keys().hasOnly(['name', 'email', 'sector', 'birthDate', 'voterId', 'loginCodeHash', 'active', 'role', 'createdAt'])
+        && request.resource.data.keys().hasAll(['name', 'email', 'sector', 'birthDate', 'voterId', 'loginCodeHash', 'active', 'role', 'createdAt'])
         && request.resource.data.active == true
         && request.resource.data.role == 'voter'
         && request.resource.data.createdAt == request.time
-        && getAfter(rosterPath(request.auth.token.email)).data.active == true
-        && getAfter(rosterPath(request.auth.token.email)).data.claimedBy == uid
-        && getAfter(rosterPath(request.auth.token.email)).data.name == request.resource.data.name
-        && getAfter(rosterPath(request.auth.token.email)).data.sector == request.resource.data.sector
-        && getAfter(rosterPath(request.auth.token.email)).data.birthDate == request.resource.data.birthDate
-      );
+        && exists(voterPath(request.resource.data.voterId))
+        && get(voterPath(request.resource.data.voterId)).data.active == true
+        && get(voterPath(request.resource.data.voterId)).data.name == request.resource.data.name
+        && get(voterPath(request.resource.data.voterId)).data.sector == request.resource.data.sector
+        && getAfter(codePath(request.resource.data.loginCodeHash)).data.email == request.resource.data.email
+        && getAfter(codePath(request.resource.data.loginCodeHash)).data.birthDate == request.resource.data.birthDate
+        && request.resource.data.loginCodeHash is string
+        && getAfter(codePath(request.resource.data.loginCodeHash)).data.active == true
+        && getAfter(codePath(request.resource.data.loginCodeHash)).data.claimedUid == uid
+        && getAfter(codePath(request.resource.data.loginCodeHash)).data.voterId == request.resource.data.voterId
+        && getAfter(codePath(request.resource.data.loginCodeHash)).data.expiresAt > request.time;
       allow update, delete: if false;
     }
 
-    match /approvedVoters/{email} {
-      allow get: if admin() || (
-        signedIn()
-        && request.auth.token.email_verified == true
-        && request.auth.token.email == email
-      );
-      allow list: if admin();
+    match /voterRoster/{voterId} {
+      allow read: if admin();
       allow create: if admin()
-        && request.resource.data.keys().hasOnly(['name', 'email', 'sector', 'birthDate', 'active', 'claimedBy', 'claimedAt', 'createdAt'])
-        && request.resource.data.keys().hasAll(['name', 'email', 'sector', 'birthDate', 'active', 'claimedBy', 'claimedAt', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['name', 'email', 'sector', 'birthDate', 'active', 'createdAt'])
+        && request.resource.data.keys().hasAll(['name', 'email', 'sector', 'birthDate', 'active', 'createdAt'])
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0
         && request.resource.data.name.size() <= 120
-        && request.resource.data.email == email
+        && request.resource.data.email is string
         && request.resource.data.sector is string
         && validSector(request.resource.data.sector)
         && request.resource.data.birthDate is string
         && request.resource.data.active == true
-        && request.resource.data.claimedBy == null
-        && request.resource.data.claimedAt == null
         && request.resource.data.createdAt == request.time;
-      allow update: if admin() || (
-        signedIn()
-        && request.auth.token.email_verified == true
-        && request.auth.token.email == email
+      allow update, delete: if admin();
+    }
+
+    match /loginCodes/{codeHash} {
+      allow get: if admin() || (anonymousUser() && (
+        resource.data.claimedUid == request.auth.uid
+        || (resource.data.active == true && resource.data.claimedUid == null && resource.data.expiresAt > request.time)
+      ));
+      allow list: if admin();
+      allow create: if admin()
+        && request.resource.data.keys().hasOnly(['voterId', 'name', 'email', 'sector', 'birthDate', 'active', 'claimedUid', 'issuedAt', 'expiresAt'])
+        && request.resource.data.keys().hasAll(['voterId', 'name', 'email', 'sector', 'birthDate', 'active', 'claimedUid', 'issuedAt', 'expiresAt'])
+        && request.resource.data.active == true
+        && request.resource.data.claimedUid == null
+        && request.resource.data.issuedAt == request.time
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.expiresAt <= request.time + duration.value(4, 'h')
+        && exists(voterPath(request.resource.data.voterId))
+        && get(voterPath(request.resource.data.voterId)).data.active == true
+        && request.resource.data.name == get(voterPath(request.resource.data.voterId)).data.name
+        && request.resource.data.sector == get(voterPath(request.resource.data.voterId)).data.sector;
+      allow update: if admin() || (anonymousUser()
         && resource.data.active == true
-        && resource.data.claimedBy == null
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimedBy', 'claimedAt'])
-        && request.resource.data.claimedBy == request.auth.uid
-        && request.resource.data.claimedAt == request.time
-        && getAfter(userPath(request.auth.uid)).data.email == email
-        && getAfter(userPath(request.auth.uid)).data.role == 'voter'
+        && resource.data.claimedUid == null
+        && resource.data.expiresAt > request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimedUid'])
+        && request.resource.data.claimedUid == request.auth.uid
+        && get(voterPath(resource.data.voterId)).data.active == true
         && getAfter(userPath(request.auth.uid)).data.active == true
+        && getAfter(userPath(request.auth.uid)).data.role == 'voter'
+        && getAfter(userPath(request.auth.uid)).data.voterId == resource.data.voterId
+        && getAfter(userPath(request.auth.uid)).data.loginCodeHash == codeHash
       );
       allow delete: if admin();
     }
 
-    match /voterPhones/{phone} {
-      allow read, write: if false;
-    }
-    match /loginCodes/{codeHash} {
-      allow read, write: if false;
-    }
     match /loginCodeAttempts/{ipHash} {
+      allow read, write: if false;
+    }
+    match /voterPhones/{phone} {
       allow read, write: if false;
     }
 
@@ -96,8 +113,10 @@ service cloud.firestore {
         allow read: if activeVoter();
         allow write: if false;
       }
-      match /ballots/{uid}/rounds/{roundId} {
-        allow read: if admin() || (activeVoter() && request.auth.uid == uid);
+      match /ballots/{voterId}/rounds/{roundId} {
+        allow read: if admin() || (activeVoter() && (
+          get(userPath(request.auth.uid)).data.voterId == voterId || request.auth.uid == voterId
+        ));
         allow write: if false;
       }
       match /runoffs/{runoffId} {

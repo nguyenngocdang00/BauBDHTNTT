@@ -124,13 +124,17 @@ exports.submitBallot = onCall(async (request) => {
 
   const userRef = db.doc(`users/${uid}`)
   const electionRef = db.doc(`elections/${ELECTION_ID}`)
-  const ballotRef = db.doc(`elections/${ELECTION_ID}/ballots/${uid}/rounds/${round}`)
+  const identitySnap = await userRef.get()
+  if (!identitySnap.exists || identitySnap.data().active !== true) throw new HttpsError('permission-denied', 'Tài khoản chưa được admin duyệt vào danh sách HDT.')
+  const voterId = identitySnap.data().voterId || uid
+  const ballotRef = db.doc(`elections/${ELECTION_ID}/ballots/${voterId}/rounds/${round}`)
   const candidateRefs = uniqueIds.map(id => db.doc(`elections/${ELECTION_ID}/candidates/${id}`))
   const tallyRefs = uniqueIds.map(id => db.doc(`elections/${ELECTION_ID}/tallies/round${round}/candidates/${id}`))
 
   await db.runTransaction(async tx => {
     const [userSnap, electionSnap, ballotSnap, ...candidateSnaps] = await tx.getAll(userRef, electionRef, ballotRef, ...candidateRefs)
     if (!userSnap.exists || userSnap.data().active !== true) throw new HttpsError('permission-denied', 'Tài khoản chưa được admin duyệt vào danh sách HDT.')
+    if ((userSnap.data().voterId || uid) !== voterId) throw new HttpsError('failed-precondition', 'Hồ sơ cử tri đã thay đổi. Vui lòng tải lại trang.')
     if (!electionSnap.exists) throw new HttpsError('failed-precondition', 'Admin chưa tạo kỳ bầu cử.')
     const election = electionSnap.data()
     if (election.status !== 'open' || election.activeRound !== round) throw new HttpsError('failed-precondition', 'Vòng bầu cử hiện không mở.')
@@ -141,7 +145,7 @@ exports.submitBallot = onCall(async (request) => {
 
     tx.create(ballotRef, {
       round,
-      voterUid: uid,
+      voterId,
       voterName: userSnap.data().name || request.auth.token.name || '',
       candidateIds: uniqueIds,
       submittedAt: FieldValue.serverTimestamp(),
