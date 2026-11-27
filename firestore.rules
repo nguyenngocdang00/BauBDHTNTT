@@ -8,6 +8,9 @@ service cloud.firestore {
     function userPath(uid) { return /databases/$(database)/documents/users/$(uid); }
     function voterPath(voterId) { return /databases/$(database)/documents/voterRoster/$(voterId); }
     function codePath(codeHash) { return /databases/$(database)/documents/loginCodes/$(codeHash); }
+    function ballotPath(electionId, ballotId) {
+      return /databases/$(database)/documents/elections/$(electionId)/ballots/$(ballotId);
+    }
     function admin() {
       return signedIn() && adminProfileIsActive();
     }
@@ -22,6 +25,54 @@ service cloud.firestore {
     }
     function validSector(sector) {
       return sector in ['Ngành Chiên', 'Ngành Ấu', 'Ngành Thiếu', 'Ngành Nghĩa', 'Ngành Hiệp', 'Ban Điều hành', 'Khác'];
+    }
+    function validBallotCreate(electionId, ballotId) {
+      let profile = get(userPath(request.auth.uid)).data;
+      let election = get(/databases/$(database)/documents/elections/$(electionId)).data;
+      let round = request.resource.data.round;
+      let candidateIds = request.resource.data.candidateIds;
+      let requiredCount = round == 1 ? 11 : 5;
+      let allowedIds = round == 1 ? election.round1CandidateIds : election.round2CandidateIds;
+      let expectedBallotId = (round == 1 ? '1_' : '2_') + profile.voterId;
+      return electionId == 'current'
+        && activeVoter()
+        && profile.voterId is string
+        && profile.voterId.size() > 0
+        && round in [1, 2]
+        && ballotId == expectedBallotId
+        && request.resource.data.keys().hasOnly(['round', 'voterId', 'voterName', 'candidateIds', 'submittedAt'])
+        && request.resource.data.keys().hasAll(['round', 'voterId', 'voterName', 'candidateIds', 'submittedAt'])
+        && request.resource.data.voterId == profile.voterId
+        && request.resource.data.voterName == profile.name
+        && candidateIds is list
+        && candidateIds.size() == requiredCount
+        && candidateIds.toSet().size() == requiredCount
+        && candidateIds.hasOnly(allowedIds)
+        && request.resource.data.submittedAt == request.time
+        && election.status == 'open'
+        && election.activeRound == round
+        && election.endsAt > request.time
+        && (round == 1
+          ? getAfter(/databases/$(database)/documents/elections/$(electionId)).data.round1VotedCount == election.round1VotedCount + 1
+          : getAfter(/databases/$(database)/documents/elections/$(electionId)).data.round2VotedCount == election.round2VotedCount + 1);
+    }
+    function validVoterCounterUpdate(electionId) {
+      let profile = get(userPath(request.auth.uid)).data;
+      let affected = request.resource.data.diff(resource.data).affectedKeys();
+      return electionId == 'current'
+        && activeVoter()
+        && resource.data.status == 'open'
+        && resource.data.endsAt > request.time
+        && ((resource.data.activeRound == 1
+          && affected.hasOnly(['round1VotedCount'])
+          && request.resource.data.round1VotedCount == resource.data.round1VotedCount + 1
+          && getAfter(ballotPath(electionId, '1_' + profile.voterId)).data.round == 1
+          && getAfter(ballotPath(electionId, '1_' + profile.voterId)).data.voterId == profile.voterId)
+        || (resource.data.activeRound == 2
+          && affected.hasOnly(['round2VotedCount'])
+          && request.resource.data.round2VotedCount == resource.data.round2VotedCount + 1
+          && getAfter(ballotPath(electionId, '2_' + profile.voterId)).data.round == 2
+          && getAfter(ballotPath(electionId, '2_' + profile.voterId)).data.voterId == profile.voterId));
     }
 
     match /users/{uid} {
@@ -106,20 +157,24 @@ service cloud.firestore {
 
     match /elections/{electionId} {
       allow read: if activeVoter();
-      allow write: if admin();
+      allow create, delete: if admin();
+      allow update: if admin() || validVoterCounterUpdate(electionId);
       match /candidates/{candidateId} {
         allow read: if activeVoter();
         allow write: if admin();
       }
       match /tallies/{roundId}/candidates/{candidateId} {
         allow read: if activeVoter();
-        allow write: if false;
+        allow write: if admin();
       }
-      match /ballots/{voterId}/rounds/{roundId} {
-        allow read: if admin() || (activeVoter() && (
-          get(userPath(request.auth.uid)).data.voterId == voterId || request.auth.uid == voterId
+      match /ballots/{ballotId} {
+        allow get: if admin() || (activeVoter() && (
+          ballotId == '1_' + get(userPath(request.auth.uid)).data.voterId
+          || ballotId == '2_' + get(userPath(request.auth.uid)).data.voterId
         ));
-        allow write: if false;
+        allow list: if admin();
+        allow create: if validBallotCreate(electionId, ballotId);
+        allow update, delete: if false;
       }
       match /runoffs/{runoffId} {
         allow read: if activeVoter();

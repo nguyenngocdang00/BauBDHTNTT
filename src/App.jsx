@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bell, ChevronDown, ChevronRight, CircleHelp, ClipboardList, Download, Copy, LayoutDashboard, LogOut, Search, ShieldCheck, SlidersHorizontal, Users, Vote, X, Check, Clock3, ArrowUpRight, Menu, Settings, CalendarDays } from 'lucide-react'
-import { firebaseConfigured, auth, db, functions } from './firebase.js'
+import { firebaseConfigured, auth, db } from './firebase.js'
 import { GoogleAuthProvider, onAuthStateChanged, signInAnonymously, signInWithPopup, signOut } from 'firebase/auth'
-import { collection, doc, getDoc, onSnapshot, serverTimestamp, setDoc, Timestamp, updateDoc, writeBatch } from 'firebase/firestore'
-import { httpsCallable } from 'firebase/functions'
+import { collection, doc, getDoc, getDocs, onSnapshot, runTransaction, serverTimestamp, setDoc, Timestamp, updateDoc, writeBatch } from 'firebase/firestore'
 
 const roles = [
   { icon: '✳', title: 'Trưởng đoàn', category: 'Ban Thường vụ', color: 'coral' },
@@ -107,6 +106,7 @@ function App() {
   const [electionForm, setElectionForm] = useState({ name: '', term: '', description: '', endsAt: '' })
   const [savingElection, setSavingElection] = useState(false)
   const [syncingCandidates, setSyncingCandidates] = useState(false)
+  const [publishingResults, setPublishingResults] = useState(false)
   const [roundTallies, setRoundTallies] = useState({})
   const [votedRounds, setVotedRounds] = useState({})
   const [loadingData, setLoadingData] = useState(false)
@@ -411,8 +411,8 @@ function App() {
       snap.docs.forEach(item => { result[item.id] = item.data().votes || 0 })
       setRoundTallies(result)
     }, fail))
-    for (const ballotRound of [1, 2]) {
-      unsubs.push(onSnapshot(doc(db, 'elections', 'current', 'ballots', profile.voterId || authUser.uid, 'rounds', String(ballotRound)), snap => {
+    if (profile.voterId) for (const ballotRound of [1, 2]) {
+      unsubs.push(onSnapshot(doc(db, 'elections', 'current', 'ballots', `${ballotRound}_${profile.voterId}`), snap => {
         setVotedRounds(current => ({ ...current, [ballotRound]: snap.exists() }))
       }, fail))
     }
@@ -429,16 +429,37 @@ function App() {
   const submitBallot = async () => {
     if (selected.length !== maxSelection) return notify(`Vui lòng chọn đủ ${maxSelection} người trước khi xác nhận.`)
     if (election?.status !== 'open' || election?.activeRound !== round || votedRounds[round]) return notify('Vòng này hiện không nhận thêm phiếu.')
-    if (!functions) return notify('Chưa cấu hình Firebase Functions.')
+    const voterId = profile?.voterId
+    if (!voterId) return notify('Hồ sơ đăng nhập chưa gắn với mã Huynh trưởng. Hãy đăng xuất và đăng nhập lại bằng mã được cấp.')
+    const electionRef = doc(db, 'elections', 'current')
+    const ballotRef = doc(db, 'elections', 'current', 'ballots', `${round}_${voterId}`)
     try {
-      await httpsCallable(functions, 'submitBallot')({ round, candidateIds: selected })
+      await runTransaction(db, async transaction => {
+        const [electionSnap, ballotSnap] = await Promise.all([transaction.get(electionRef), transaction.get(ballotRef)])
+        if (!electionSnap.exists()) throw new Error('Admin chưa tạo kỳ bầu cử.')
+        if (ballotSnap.exists()) throw new Error('Bạn đã bỏ phiếu ở vòng này.')
+        const currentElection = electionSnap.data()
+        if (currentElection.status !== 'open' || currentElection.activeRound !== round) throw new Error('Vòng bầu cử hiện không mở.')
+        if (currentElection.endsAt?.toMillis && currentElection.endsAt.toMillis() <= Date.now()) throw new Error('Đã hết thời gian bỏ phiếu.')
+        const allowedIds = currentElection[`round${round}CandidateIds`] || []
+        if (selected.some(id => !allowedIds.includes(id))) throw new Error('Danh sách ứng viên đã thay đổi. Hãy tải lại trang và chọn lại.')
+        transaction.set(ballotRef, {
+          round,
+          voterId,
+          voterName: profile.name || '',
+          candidateIds: selected,
+          submittedAt: serverTimestamp(),
+        })
+        transaction.update(electionRef, { [`round${round}VotedCount`]: (currentElection[`round${round}VotedCount`] || 0) + 1 })
+      })
       setVotedRounds(current => ({ ...current, [round]: true }))
       notify(`Phiếu vòng ${round} đã được ghi nhận thành công.`)
       setTab('dashboard')
     } catch (error) {
-      notify(error.code === 'functions/not-found'
-        ? 'Gửi phiếu hiện cần Cloud Functions; dự án Spark chưa có chức năng này được triển khai.'
-        : error.message || 'Không gửi được phiếu bầu.')
+      const message = error.code === 'permission-denied'
+        ? 'Firestore từ chối phiếu. Admin cần deploy Rules mới và đóng/mở lại vòng để lưu danh sách ứng viên hiện tại.'
+        : error.message || 'Không gửi được phiếu bầu.'
+      notify(message)
     }
   }
   const saveRoleAssignments = async () => {
@@ -535,6 +556,7 @@ function App() {
         ...payload,
         status: 'open',
         activeRound: 1,
+        round1CandidateIds: activeCandidates.map(candidate => candidate.id),
         round1VotedCount: election?.round1VotedCount || 0,
         round2VotedCount: election?.round2VotedCount || 0,
       }, { merge: true })
@@ -567,6 +589,7 @@ function App() {
         ...payload,
         status: 'open',
         activeRound: 2,
+        round2CandidateIds: candidates.filter(candidate => candidate.active !== false && candidate.elected).map(candidate => candidate.id),
         round1VotedCount: election?.round1VotedCount || 0,
         round2VotedCount: election?.round2VotedCount || 0,
       }, { merge: true })
@@ -574,6 +597,33 @@ function App() {
       notify('Đã mở vòng 2.')
     } catch (error) { notify(`Không mở được vòng 2: ${error.message}`) }
     finally { setSavingElection(false) }
+  }
+  const publishRoundResults = async targetRound => {
+    if (!isAdmin) return notify('Chỉ admin đoàn mới được tổng hợp kết quả.')
+    if (election?.status === 'open') return notify('Hãy đóng vòng trước khi tổng hợp kết quả.')
+    setPublishingResults(true)
+    try {
+      const [ballotSnapshot, candidateSnapshot] = await Promise.all([
+        getDocs(collection(db, 'elections', 'current', 'ballots')),
+        getDocs(collection(db, 'elections', 'current', 'candidates')),
+      ])
+      const totals = {}
+      ballotSnapshot.docs.forEach(ballot => {
+        const data = ballot.data()
+        if (data.round === targetRound) new Set(data.candidateIds || []).forEach(id => { totals[id] = (totals[id] || 0) + 1 })
+      })
+      const batch = writeBatch(db)
+      candidateSnapshot.docs.forEach(candidate => {
+        batch.set(doc(db, 'elections', 'current', 'tallies', `round${targetRound}`, 'candidates', candidate.id), {
+          candidateId: candidate.id,
+          votes: totals[candidate.id] || 0,
+          updatedAt: serverTimestamp(),
+        })
+      })
+      await batch.commit()
+      notify(`Đã tổng hợp ${Object.values(totals).reduce((sum, count) => sum + count, 0)} lượt chọn vào kết quả vòng ${targetRound}.`)
+    } catch (error) { notify(`Không tổng hợp được kết quả: ${error.message}`) }
+    finally { setPublishingResults(false) }
   }
   const nav = [
     { key: 'dashboard', label: 'Tổng quan', icon: LayoutDashboard },
@@ -612,7 +662,8 @@ function App() {
           onSave={saveElectionConfiguration} onSync={syncCandidatesFromRoster}
           onToggleCandidate={toggleCandidate} onToggleElected={toggleElectedCandidate}
           onOpenRound1={openElectionRound1} onOpenRound2={openElectionRound2}
-          onCloseRound={closeElectionRound}
+          onCloseRound={closeElectionRound} onPublishResults={publishRoundResults}
+          publishingResults={publishingResults}
         />}
         {tab === 'dashboard' && <>
           <div className="section-heading"><div><h2>Tổng quan bầu cử</h2><p>Theo dõi tiến độ và thông tin kỳ bầu cử hiện tại</p></div><button className="date-filter">◷ <span>Toàn bộ thời gian</span><ChevronDown size={14}/></button></div>
@@ -621,7 +672,7 @@ function App() {
           <section className="panel activity-panel"><PanelTitle title="Trạng thái dữ liệu" subtitle="Cập nhật trực tiếp từ Firebase"/><div className="activity-list"><Activity color="purple" icon={<Users size={15}/>} title={`${candidates.length} ứng viên`} detail="Danh sách đồng bộ từ Firestore" time={loadingData?'Đang tải…':'Đang cập nhật trực tiếp'}/><Activity color="green" icon={<Vote size={15}/>} title={election?.status==='open'?`Vòng ${election.activeRound} đang mở`:'Kỳ bầu cử chưa mở'} detail="Trạng thái lấy từ tài liệu kỳ bầu cử" time="Firebase Firestore"/><Activity color="orange" icon={<ShieldCheck size={15}/>} title={isAdmin?'Quyền admin đoàn':'Tài khoản HDT'} detail="Quyền được đọc từ hồ sơ đã duyệt" time={authUser.email}/></div></section></div>
           <section className="panel winners-panel"><PanelTitle title="Danh sách đang dẫn đầu" subtitle="Top 5 Huynh trưởng có số phiếu cao nhất vòng 1" action="Xem tất cả kết quả" onAction={() => setTab('results')}/><div className="table-wrap"><table><thead><tr><th>HẠNG</th><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>SỐ PHIẾU</th><th>TỶ LỆ</th><th>TRẠNG THÁI</th></tr></thead><tbody>{ranked.slice(0,5).map((person,index)=><tr key={person.id}><td><span className={`rank ${index===0?'first':''}`}>{String(index+1).padStart(2,'0')}</span></td><td><div className="person-cell"><Avatar person={person} size="small"/><b>{person.name}</b></div></td><td><span className="sector-chip">{person.sector.replace('Ngành ','')}</span></td><td><b>{person.votes}</b> phiếu</td><td><span className="table-progress"><i style={{width:`${Math.round(person.votes/(ranked[0]?.votes || 1)*100)}%`}}/></span> {Math.round(person.votes/(voterCount || 1)*100)}%</td><td><span className="status-chip elected"><i/> Đang dẫn đầu</span></td></tr>)}</tbody></table></div></section>
         </>}
-        {tab === 'vote' && <div className="vote-layout"><section className="panel ballot-panel"><div className="ballot-top"><div><span className="banner-kicker">PHIẾU BẦU CỬ · VÒNG {round}</span><h2>{round === 1 ? 'Chọn 11 thành viên Ban điều hành' : 'Chọn 5 thành viên Ban Thường vụ'}</h2><p>{round === 1 ? 'Chọn 11 Huynh trưởng mà bạn tín nhiệm. Bạn có thể tự bầu cho mình.' : 'Chọn 5 người trong danh sách 11 thành viên đã trúng cử.'}</p></div><div className="round-switch"><button className={round===1?'selected':''} onClick={() => {setRound(1);setSelected([])}}>Vòng 1</button><button className={round===2?'selected':''} onClick={() => {setRound(2);setSelected([])}}>Vòng 2</button></div></div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label><button className="filter-button"><SlidersHorizontal size={15}/> Tất cả ngành <ChevronDown size={14}/></button><span className="selection-count">Đã chọn <b>{selected.length}</b> / {maxSelection}</span></div><div className="candidate-grid">{ballotCandidates.filter(person=>`${person.name} ${person.sector}`.toLowerCase().includes(query.toLowerCase())).map(person=><button key={person.id} className={`candidate-card ${selected.includes(person.id)?'chosen':''}`} onClick={()=>selectCandidate(person.id)}><Avatar person={person}/><span className="candidate-name"><b>{person.name}</b><small>{person.sector}</small></span><span className={`checkbox ${selected.includes(person.id)?'checked':''}`}>{selected.includes(person.id)&&<Check size={13}/>}</span></button>)}</div><div className="ballot-footer"><span><ShieldCheck size={16}/> Phiếu bầu của bạn được bảo mật</span><button className="primary-button" onClick={submitBallot}>Xác nhận phiếu bầu <ChevronRight size={16}/></button></div></section><aside className="panel ballot-aside"><div className="aside-icon"><ClipboardList size={20}/></div><h3>Hướng dẫn bỏ phiếu</h3><ol><li><span>1</span><p>Chọn đúng <b>{maxSelection} Huynh trưởng</b> mà bạn tín nhiệm.</p></li><li><span>2</span><p>Bạn có thể <b>tự chọn chính mình</b> trong danh sách.</p></li><li><span>3</span><p>Kiểm tra lựa chọn trước khi nhấn xác nhận.</p></li><li><span>4</span><p>Sau khi gửi, phiếu bầu <b>không thể chỉnh sửa</b>.</p></li></ol><div className="aside-note"><ShieldCheck size={15}/><span>Mỗi Huynh trưởng chỉ được bỏ phiếu một lần trong mỗi vòng.</span></div><div className="aside-deadline"><Clock3 size={16}/><span>Hạn bỏ phiếu<b>24/11/2025 · 23:59</b></span></div></aside></div>}
+        {tab === 'vote' && <div className="vote-layout"><section className="panel ballot-panel"><div className="ballot-top"><div><span className="banner-kicker">PHIẾU BẦU CỬ · VÒNG {round}</span><h2>{round === 1 ? 'Chọn 11 thành viên Ban điều hành' : 'Chọn 5 thành viên Ban Thường vụ'}</h2><p>{round === 1 ? 'Chọn 11 Huynh trưởng mà bạn tín nhiệm. Bạn có thể tự bầu cho mình.' : 'Chọn 5 người trong danh sách 11 thành viên đã trúng cử.'}</p></div><div className="round-switch"><button className={round===1?'selected':''} onClick={() => {setRound(1);setSelected([])}}>Vòng 1</button><button className={round===2?'selected':''} onClick={() => {setRound(2);setSelected([])}}>Vòng 2</button></div></div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label><button className="filter-button"><SlidersHorizontal size={15}/> Tất cả ngành <ChevronDown size={14}/></button><span className="selection-count">Đã chọn <b>{selected.length}</b> / {maxSelection}</span></div><div className="candidate-grid">{ballotCandidates.filter(person=>`${person.name} ${person.sector}`.toLowerCase().includes(query.toLowerCase())).map(person=><button key={person.id} className={`candidate-card ${selected.includes(person.id)?'chosen':''}`} onClick={()=>selectCandidate(person.id)}><Avatar person={person}/><span className="candidate-name"><b>{person.name}</b><small>{person.sector}</small></span><span className={`checkbox ${selected.includes(person.id)?'checked':''}`}>{selected.includes(person.id)&&<Check size={13}/>}</span></button>)}</div><div className="ballot-footer"><span><ShieldCheck size={16}/> Phiếu bầu của bạn được bảo mật</span><button className="primary-button" onClick={submitBallot}>Xác nhận phiếu bầu <ChevronRight size={16}/></button></div></section><aside className="panel ballot-aside"><div className="aside-icon"><ClipboardList size={20}/></div><h3>Hướng dẫn bỏ phiếu</h3><ol><li><span>1</span><p>Chọn đúng <b>{maxSelection} Huynh trưởng</b> mà bạn tín nhiệm.</p></li><li><span>2</span><p>Bạn có thể <b>tự chọn chính mình</b> trong danh sách.</p></li><li><span>3</span><p>Kiểm tra lựa chọn trước khi nhấn xác nhận.</p></li><li><span>4</span><p>Sau khi gửi, phiếu bầu <b>không thể chỉnh sửa</b>.</p></li></ol><div className="aside-note"><ShieldCheck size={15}/><span>Mỗi Huynh trưởng chỉ được bỏ phiếu một lần trong mỗi vòng.</span></div><div className="aside-deadline"><Clock3 size={16}/><span>Hạn bỏ phiếu<b>{election?.endsAt?.toDate ? election.endsAt.toDate().toLocaleString('vi-VN', { timeZone: 'Asia/Bangkok' }) : 'Chưa thiết lập'}</b></span></div></aside></div>}
         {tab === 'results' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">KỲ BẦU CỬ · {election?.term || 'Nhiệm kỳ chưa thiết lập'}</span><h2>Kết quả vòng {round}</h2><p>Công khai đầy đủ số phiếu của từng ứng viên.</p></div><button className="outline-button" onClick={()=>notify('Đang chuẩn bị biên bản kết quả...')}><Download size={16}/> Tải biên bản</button></div><div className="result-tabs"><button className={round===1?'selected':''} onClick={()=>setRound(1)}>Vòng 1 · Bầu 11 thành viên</button><button className={round===2?'selected':''} onClick={()=>setRound(2)}>Vòng 2 · Ban Thường vụ</button></div><div className="table-wrap"><table><thead><tr><th>HẠNG</th><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>SỐ PHIẾU</th><th>TỶ LỆ PHIẾU</th><th>KẾT QUẢ</th></tr></thead><tbody>{ranked.map((person,index)=><tr key={person.id}><td><span className={`rank ${index<(round===1?11:5)?'first':''}`}>{String(index+1).padStart(2,'0')}</span></td><td><div className="person-cell"><Avatar person={person} size="small"/><b>{person.name}</b></div></td><td><span className="sector-chip">{person.sector.replace('Ngành ','')}</span></td><td><b>{person.votes}</b> phiếu</td><td><div className="result-vote"><ProgressBar value={Math.round(person.votes/(ranked[0]?.votes || 1)*100)} color={index<(round===1?11:5)?'green':'gray'}/><span>{Math.round(person.votes/(voterCount || 1)*100)}%</span></div></td><td>{index<(round===1?11:5)?<span className="status-chip elected"><i/> Trúng cử</span>:<span className="status-chip pending">Chưa trúng cử</span>}</td></tr>)}</tbody></table></div><div className="aside-note">Admin chốt danh sách trúng cử trong mục “Kỳ bầu cử” sau khi xử lý mọi trường hợp hòa phiếu.</div></section>}
         {tab === 'roles' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">CƠ CẤU BAN ĐIỀU HÀNH</span><h2>Phân công chức vụ nhiệm kỳ</h2><p>Ban Thường vụ tự nhận 5 vị trí; phân công 6 vị trí ngành và truyền thông.</p></div><button className="primary-button" onClick={saveRoleAssignments}>Lưu phân công <Check size={15}/></button></div><div className="roles-grid">{roles.map((role,index)=>{const pool=index<5?ranked.filter(p=>p.elected).slice(0,5):ranked.filter(p=>p.elected).slice(5);return <div className="role-card" key={role.title}><div className={`role-symbol ${role.color}`}>{role.icon}</div><div className="role-detail"><span>{role.category}</span><b>{role.title}</b><select value={roleAssignments[role.title]||''} onChange={e=>setRoleAssignments({...roleAssignments,[role.title]:e.target.value})}><option value="">Chọn Huynh trưởng</option>{pool.map(person=><option value={person.id} key={person.id}>{person.name}</option>)}</select></div></div>})}</div><div className="aside-note"><ShieldCheck size={15}/> Phân công mẫu minh họa. Cần lưu xác nhận của Ban Thường vụ trước khi công bố.</div></section>}
         {tab === 'members' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">DANH SÁCH CỬ TRI</span><h2>Huynh trưởng Xứ đoàn</h2><p>{memberRows.length} hồ sơ HDT · Dữ liệu Firestore</p></div><div className="member-header-actions"><button className="outline-button" disabled={issuingCodes||!codeableMembers.length} onClick={()=>issueLoginCodes(codeableMembers)}>{issuingCodes?'Đang cấp mã…':`Cấp mã cho ${codeableMembers.length} HDT`}</button><button className="primary-button" onClick={()=>setShowAddMembers(true)}>+ Thêm HDT</button></div></div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label><small>Mỗi mã dùng một lần, hết hạn sau 4 giờ.</small></div><div className="table-wrap"><table><thead><tr><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>NGÀY SINH</th><th>TÀI KHOẢN</th><th>VÒNG 1</th><th>VÒNG 2</th><th>MÃ ĐĂNG NHẬP</th></tr></thead><tbody>{memberRows.filter(person=>`${person.name||person.email||''} ${person.sector||''}`.toLowerCase().includes(query.toLowerCase())).map(person=><tr key={person.id}><td><div className="person-cell"><Avatar person={{...person,initials:person.initials||String(person.name||person.email||'?').split(/\s+/).slice(-2).map(x=>x[0]).join('').toUpperCase(),color:person.color||'mint'}} size="small"/><b>{person.name||person.email}</b></div></td><td><span className="sector-chip">{person.sector||'—'}</span></td><td>{person.birthDate?person.birthDate.split('-').reverse().join('/'):'—'}</td><td><span className={`status-chip ${person.active?'elected':'pending'}`}><i/> {person.active?'Hoạt động':'Chưa kích hoạt'}</span></td><td><span className="status-chip done">{person.round1Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><span className="status-chip pending">{person.round2Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><button className="outline-button" disabled={!person.rosterRecord||issuingCodes} onClick={()=>issueLoginCode(person)}>{!person.rosterRecord?'Nhập lại danh sách':person.pendingAccount?'Cấp mã':'Cấp lại mã'}</button></td></tr>)}</tbody></table>{!memberRows.length&&<div className="empty-state">Chưa có hồ sơ HDT trong danh sách.</div>}</div></section>}
@@ -634,7 +685,7 @@ function App() {
   </div>
 }
 
-function ElectionAdminPanel({form,setForm,election,rosterMembers,candidates,roundTallies,saving,syncing,onSave,onSync,onToggleCandidate,onToggleElected,onOpenRound1,onOpenRound2,onCloseRound}) {
+function ElectionAdminPanel({form,setForm,election,rosterMembers,candidates,roundTallies,saving,syncing,publishingResults,onSave,onSync,onToggleCandidate,onToggleElected,onOpenRound1,onOpenRound2,onCloseRound,onPublishResults}) {
   const activeCandidates = candidates.filter(person => person.active !== false)
   const electedCandidates = activeCandidates.filter(person => person.elected)
   const isOpen = election?.status === 'open'
@@ -651,9 +702,9 @@ function ElectionAdminPanel({form,setForm,election,rosterMembers,candidates,roun
     </section>
     <section className="panel election-round-panel">
       <div className="results-header"><div><span className="banner-kicker">ĐIỀU KHIỂN BẦU CỬ</span><h2>Các vòng bầu chọn</h2><p>Chỉ mở vòng sau khi đã kiểm tra danh sách và hạn kết thúc.</p></div><CalendarDays size={22}/></div>
-      <div className="round-admin-row"><div><b>Vòng 1 · Bầu 11 thành viên</b><small>{election?.round1VotedCount||0} / {rosterMembers.length} HDT đã bỏ phiếu</small></div>{isOpen&&election.activeRound===1?<button className="outline-button" onClick={onCloseRound} disabled={saving}>Đóng vòng 1</button>:<button className="primary-button" onClick={onOpenRound1} disabled={saving||isOpen}>Mở vòng 1</button>}</div>
-      <div className="round-admin-row"><div><b>Vòng 2 · Bầu 5 Ban Thường vụ</b><small>{electedCandidates.length} / 11 người đã được chốt từ vòng 1</small></div>{isOpen&&election.activeRound===2?<button className="outline-button" onClick={onCloseRound} disabled={saving}>Đóng vòng 2</button>:<button className="primary-button" onClick={onOpenRound2} disabled={saving||isOpen||electedCandidates.length!==11}>Mở vòng 2</button>}</div>
-      <div className="election-backend-warning"><ShieldCheck size={17}/><span><b>Lưu ý trước khi mở kỳ thật</b>Gửi phiếu hiện gọi Cloud Functions. Firebase yêu cầu gói Blaze để triển khai chức năng này; cấu hình và danh sách ứng viên có thể lưu trên Spark, nhưng phiếu chưa thể được ghi nhận nếu Functions chưa triển khai.</span></div>
+      <div className="round-admin-row"><div><b>Vòng 1 · Bầu 11 thành viên</b><small>{election?.round1VotedCount||0} / {rosterMembers.length} HDT đã bỏ phiếu</small></div><div className="round-admin-actions">{isOpen&&election.activeRound===1?<button className="outline-button" onClick={onCloseRound} disabled={saving}>Đóng vòng 1</button>:<><button className="outline-button" onClick={()=>onPublishResults(1)} disabled={saving||publishingResults||isOpen||election?.activeRound!==1}>{publishingResults?'Đang tổng hợp…':'Tổng hợp phiếu'}</button><button className="primary-button" onClick={onOpenRound1} disabled={saving||isOpen}>Mở vòng 1</button></>}</div></div>
+      <div className="round-admin-row"><div><b>Vòng 2 · Bầu 5 Ban Thường vụ</b><small>{electedCandidates.length} / 11 người đã được chốt từ vòng 1 · {election?.round2VotedCount||0} HDT đã bỏ phiếu</small></div><div className="round-admin-actions">{isOpen&&election.activeRound===2?<button className="outline-button" onClick={onCloseRound} disabled={saving}>Đóng vòng 2</button>:<><button className="outline-button" onClick={()=>onPublishResults(2)} disabled={saving||publishingResults||isOpen||election?.activeRound!==2}>{publishingResults?'Đang tổng hợp…':'Tổng hợp phiếu'}</button><button className="primary-button" onClick={onOpenRound2} disabled={saving||isOpen||electedCandidates.length!==11}>Mở vòng 2</button></>}</div></div>
+      <div className="election-backend-warning"><ShieldCheck size={17}/><span><b>Gửi phiếu không cần Cloud Functions</b>Phiếu được ghi trực tiếp vào Firestore và bảo vệ bằng Rules: mỗi HDT chỉ tạo một phiếu mỗi vòng. Sau khi đóng vòng, nhấn “Tổng hợp phiếu” để cập nhật kết quả công khai.</span></div>
     </section>
     <section className="panel election-candidates-panel">
       <div className="results-header"><div><span className="banner-kicker">DANH SÁCH ỨNG VIÊN</span><h2>HDT được đưa vào vòng 1</h2><p>Đồng bộ từ danh sách HDT. Tắt những người không tham gia ứng cử.</p></div><button className="outline-button" onClick={onSync} disabled={syncing||isOpen}>{syncing?'Đang đồng bộ…':'Đồng bộ danh sách HDT'}</button></div>

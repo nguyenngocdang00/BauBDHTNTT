@@ -45,15 +45,11 @@ Tài khoản admin hiện đăng nhập bằng Google. Không bật đăng nhậ
 
 Admin mở mục **Kỳ bầu cử** để nhập tên kỳ, nhiệm kỳ, mô tả và hạn kết thúc. Nhấn **Lưu cấu hình**, sau đó chọn **Đồng bộ danh sách HDT** để đưa các Huynh trưởng đang hoạt động vào danh sách ứng viên. Có thể loại ứng viên trước khi mở vòng 1.
 
-Khi đã rà soát danh sách, nhấn **Mở vòng 1**. Sau khi đóng vòng 1, admin kiểm tra số phiếu và đánh dấu đúng 11 người trúng cử; nếu hòa ở ranh giới, tổ chức vòng phụ trước khi chốt. Khi đủ 11 người, nhấn **Mở vòng 2**. Đóng vòng khi hết hạn hoặc hoàn tất. Mọi thao tác cấu hình và mở/đóng được lưu vào `elections/current` trên Firestore; danh sách ứng viên lưu trong `elections/current/candidates`.
-
-**Không mở bầu cử thật trên Spark ở phiên bản hiện tại.** Giao diện cấu hình, đồng bộ ứng viên và trạng thái kỳ bầu cử dùng Firestore; việc ghi phiếu vẫn gọi Cloud Function `submitBallot`, cần Blaze để triển khai. Có thể chuẩn bị dữ liệu, nhưng phiếu sẽ không gửi được nếu Function chưa hoạt động.
+Khi đã rà soát danh sách, nhấn **Mở vòng 1**. Sau khi đóng vòng 1, nhấn **Tổng hợp phiếu**, kiểm tra kết quả và đánh dấu đúng 11 người trúng cử; nếu hòa ở ranh giới, tổ chức vòng phụ trước khi chốt. Khi đủ 11 người, nhấn **Mở vòng 2**. Đóng vòng khi hết hạn hoặc hoàn tất rồi tổng hợp kết quả vòng 2. Mọi thao tác cấu hình và mở/đóng được lưu vào `elections/current` trên Firestore; danh sách ứng viên lưu trong `elections/current/candidates`.
 
 ## Giới hạn chi phí và triển khai
 
-Đăng nhập bằng mã và lưu danh sách dùng Firebase Authentication Anonymous + Firestore, không dùng SMS và không cần Cloud Functions. Việc sử dụng vẫn nằm trong hạn mức miễn phí Spark; Google có thể từ chối thao tác khi vượt hạn mức Spark.
-
-**Chức năng gửi phiếu hiện vẫn dùng `submitBallot` Cloud Function.** Firebase yêu cầu gói Blaze để triển khai Cloud Functions, nên hiện tại chưa thể bỏ phiếu thật trên Spark. Không nâng gói hoặc mở kỳ bầu cử thật nếu chưa quyết định cách xử lý backend này. Khi triển khai Function về sau, phiếu đã được gắn với `voterId` cố định của hồ sơ để mã cấp lại không tạo thêm lượt bầu.
+Đăng nhập bằng mã, lưu danh sách và gửi phiếu dùng Firebase Authentication + Firestore, không dùng SMS và không gọi Cloud Functions. Rules chỉ cho phép mỗi hồ sơ HDT tạo một phiếu cho mỗi vòng; phiếu không thể sửa/xóa và chỉ admin đọc được danh tính cùng lựa chọn. Sau khi đóng vòng, admin dùng trang cấu hình để tổng hợp phiếu thành bảng kết quả công khai. Việc sử dụng vẫn trong hạn mức miễn phí Spark (có thể bị giới hạn nếu vượt quota).
 
 Workflow `.github/workflows/deploy.yml` build khi push lên nhánh `main`. Trong GitHub chọn **Settings → Pages → Build and deployment → GitHub Actions** và khai báo các `VITE_FIREBASE_*` repository variables.
 
