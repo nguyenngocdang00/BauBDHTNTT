@@ -37,7 +37,9 @@ service cloud.firestore {
       let election = get(/databases/$(database)/documents/elections/$(electionId)).data;
       let round = request.resource.data.round;
       let candidateIds = request.resource.data.candidateIds;
-      let requiredCount = round == 1 ? 11 : 5;
+      let requiredCount = round == 1
+        ? (election.round1Seats is int ? election.round1Seats : 11)
+        : (election.round2Seats is int ? election.round2Seats : 5);
       let allowedIds = round == 1 ? election.round1CandidateIds : election.round2CandidateIds;
       let expectedBallotId = (round == 1 ? '1_' : '2_') + profile.voterId;
       return activeVoter()

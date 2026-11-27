@@ -43,13 +43,13 @@ Tài khoản admin hiện đăng nhập bằng Google. Không bật đăng nhậ
 
 ## Cấu hình kỳ bầu cử trên giao diện
 
-Admin mở mục **Kỳ bầu cử** để nhập tên kỳ, nhiệm kỳ, mô tả và hạn kết thúc. Nhấn **Lưu cấu hình**, sau đó chọn **Đồng bộ danh sách HDT** để đưa các Huynh trưởng đang hoạt động vào danh sách ứng viên. Có thể loại ứng viên trước khi mở vòng 1.
+Admin mở mục **Kỳ bầu cử** để nhập tên kỳ, nhiệm kỳ, mô tả, hạn kết thúc và số người được bầu ở mỗi vòng. Mặc định vòng 1 là 11, vòng 2 là 5; có thể thay đổi trước khi kỳ bắt đầu. Nhấn **Lưu cấu hình**, sau đó chọn **Chọn HDT từ danh sách** và tích những Huynh trưởng đủ điều kiện tham gia ứng cử trong kỳ này. Danh sách ứng viên của mỗi kỳ được chọn độc lập với danh sách HDT chung.
 
-Khi đã rà soát danh sách, nhấn **Mở vòng 1**. Sau khi đóng vòng 1, nhấn **Tổng hợp phiếu**. Nếu hòa ở vị trí thứ 11, phần **Tạo vòng phụ** gợi ý nhóm người hòa theo kết quả hiện có; admin chọn nhóm đồng phiếu, nhập số suất còn thiếu và hạn bỏ phiếu rồi mở đợt phụ. Ví dụ có 7 người chắc suất và 6 người cùng 9 phiếu tranh 4 suất, chọn cả 6 người và nhập 4. HDT bỏ một phiếu phụ riêng; phiếu và bảng điểm vòng 1 không bị sửa. Đóng vòng phụ, kiểm tra số phiếu, chọn đúng số người thắng rồi chốt để cập nhật danh sách 11. Khi đủ 11 người, nhấn **Mở vòng 2**. Sau khi đóng vòng 2 và tổng hợp phiếu, admin đánh dấu đúng 5 người trong mục **Chốt kết quả vòng 2** rồi xác nhận; danh sách 5 người được lưu riêng trên kỳ bầu cử, phiếu và tally vòng 2 không đổi. Phiếu phụ lưu dưới collection con `runoffs/{id}` của kỳ đang chọn; dữ liệu ballot/tally vòng 1 không đổi.
+Khi đã rà soát danh sách, nhấn **Mở vòng 1**. Sau khi đóng vòng 1, nhấn **Tổng hợp phiếu**. Nếu hòa tại ranh giới số người cấu hình vòng 1, phần **Tạo vòng phụ** gợi ý nhóm người hòa theo kết quả hiện có; admin chọn nhóm đồng phiếu, nhập số suất còn thiếu và hạn bỏ phiếu rồi mở đợt phụ. HDT bỏ một phiếu phụ riêng; phiếu và bảng điểm vòng 1 không bị sửa. Đóng vòng phụ, kiểm tra số phiếu, chọn đúng số người thắng rồi chốt. Khi đủ số người vòng 1, nhấn **Mở vòng 2**. Sau khi đóng vòng 2 và tổng hợp phiếu, admin đánh dấu đúng số người đã cấu hình trong mục **Chốt kết quả vòng 2** rồi xác nhận; phiếu và tally vòng 2 không đổi. Phiếu phụ lưu dưới collection con `runoffs/{id}` của kỳ đang chọn; dữ liệu ballot/tally vòng 1 không đổi.
 
 ## Nhiều kỳ bầu cử
 
-Mục **Kỳ bầu cử** có bộ chọn kỳ và nút **Tạo kỳ bầu cử mới**. Dữ liệu cũ `elections/current` được giữ nguyên; mỗi kỳ mới có document ID riêng cùng các collection ứng viên, phiếu và kết quả riêng. Kỳ đang được dùng chung lưu tại `appSettings/activeElection`, nên khi admin chuyển kỳ, trang của các thành viên cũng chuyển theo. Không cho đổi kỳ khi một vòng đang mở. Sau khi tạo kỳ mới, admin nhập tên/nhiệm kỳ, lưu cấu hình, đồng bộ danh sách HDT rồi mới mở vòng 1.
+Mục **Kỳ bầu cử** có bộ chọn kỳ và nút **Tạo kỳ bầu cử mới**. Dữ liệu cũ `elections/current` được giữ nguyên; mỗi kỳ mới có document ID riêng cùng các collection ứng viên, phiếu và kết quả riêng. Kỳ đang được dùng chung lưu tại `appSettings/activeElection`, nên khi admin chuyển kỳ, trang của các thành viên cũng chuyển theo. Không cho đổi kỳ khi một vòng đang mở. Sau khi tạo kỳ mới, admin nhập tên/nhiệm kỳ, lưu cấu hình, chọn HDT đủ điều kiện ứng cử, rồi mới mở vòng 1.
 
 ## Giới hạn chi phí và triển khai
 
@@ -60,7 +60,6 @@ Workflow `.github/workflows/deploy.yml` build khi push lên nhánh `main`. Trong
 ## Thể lệ đã xác nhận
 
 - Cả hai vòng: HDT trong Xứ đoàn được bỏ phiếu; được tự bầu cho mình.
-- Vòng 1 bầu 11 người. Nếu hòa ở vị trí thứ 11, admin mở vòng phụ giữa toàn bộ người đồng phiếu để chọn số suất còn thiếu; phiếu vòng 1 được giữ nguyên.
-- Vòng 2 bầu 5 người trong danh sách 11. Nếu hòa ở vị trí thứ 5, mở vòng phụ giữa những người đồng phiếu.
+- Số người được bầu mỗi vòng do admin cấu hình riêng cho từng kỳ (mặc định vòng 1 là 11, vòng 2 là 5). Nếu hòa tại ranh giới số ghế, admin mở vòng phụ giữa toàn bộ người đồng phiếu để chọn số suất còn thiếu; phiếu vòng chính được giữ nguyên.
 - 5 người Ban Thường vụ nhận các chức vụ Trưởng đoàn, hai Phó đoàn, Thư ký, Thủ quỹ. 6 thành viên còn lại được Ban Thường vụ phân công 5 trưởng ngành và Ủy viên Truyền thông.
 - Công bố đầy đủ số phiếu chi tiết; danh tính cử tri và điều chỉnh trạng thái dành cho admin đoàn.
