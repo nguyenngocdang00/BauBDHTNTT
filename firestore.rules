@@ -9,9 +9,11 @@ service cloud.firestore {
     function voterPath(voterId) { return /databases/$(database)/documents/voterRoster/$(voterId); }
     function codePath(codeHash) { return /databases/$(database)/documents/loginCodes/$(codeHash); }
     function admin() {
-      return signedIn() && exists(userPath(request.auth.uid))
-        && get(userPath(request.auth.uid)).data.active == true
-        && get(userPath(request.auth.uid)).data.role == 'admin';
+      return signedIn() && adminProfileIsActive();
+    }
+    function adminProfileIsActive() {
+      let profile = get(userPath(request.auth.uid)).data;
+      return profile.active == true && profile.role == 'admin';
     }
     function activeVoter() {
       return signedIn() && exists(userPath(request.auth.uid))
@@ -35,7 +37,6 @@ service cloud.firestore {
         && get(voterPath(request.resource.data.voterId)).data.active == true
         && get(voterPath(request.resource.data.voterId)).data.name == request.resource.data.name
         && get(voterPath(request.resource.data.voterId)).data.sector == request.resource.data.sector
-        && getAfter(voterPath(request.resource.data.voterId)).data.loginCodeHash == request.resource.data.loginCodeHash
         && getAfter(codePath(request.resource.data.loginCodeHash)).data.email == request.resource.data.email
         && getAfter(codePath(request.resource.data.loginCodeHash)).data.birthDate == request.resource.data.birthDate
         && request.resource.data.loginCodeHash is string
@@ -79,12 +80,7 @@ service cloud.firestore {
         && request.resource.data.claimedUid == null
         && request.resource.data.issuedAt == request.time
         && request.resource.data.expiresAt > request.time
-        && request.resource.data.expiresAt <= request.time + duration.value(4, 'h')
-        && exists(voterPath(request.resource.data.voterId))
-        && get(voterPath(request.resource.data.voterId)).data.active == true
-        && request.resource.data.name == get(voterPath(request.resource.data.voterId)).data.name
-        && request.resource.data.sector == get(voterPath(request.resource.data.voterId)).data.sector
-        && getAfter(voterPath(request.resource.data.voterId)).data.loginCodeHash == codeHash;
+        && request.resource.data.expiresAt <= request.time + duration.value(4, 'h');
       allow update: if admin() || (anonymousUser()
         && resource.data.active == true
         && resource.data.claimedUid == null

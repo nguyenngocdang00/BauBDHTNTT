@@ -190,14 +190,16 @@ function App() {
     setIssuingCodes(true)
     setIssuedCodes([])
     const successful = []
+    let currentStep = 'chuẩn bị mã'
     try {
       const expiresAt = Timestamp.fromMillis(Date.now() + 4 * 60 * 60 * 1000)
       const plans = await Promise.all(eligible.map(async person => {
         const code = createLoginCode()
         return { person, code, codeHash: await hashLoginCode(code), expiresAt }
       }))
-      for (let offset = 0; offset < plans.length; offset += 200) {
-        const chunk = plans.slice(offset, offset + 200)
+      // Keep each batch small: Firestore Rules allow at most 20 document lookups per batch.
+      for (let offset = 0; offset < plans.length; offset += 5) {
+        const chunk = plans.slice(offset, offset + 5)
         const batch = writeBatch(db)
         chunk.forEach(({ person, codeHash }) => {
           batch.set(doc(db, 'loginCodes', codeHash), {
@@ -213,6 +215,7 @@ function App() {
           })
           batch.update(doc(db, 'voterRoster', person.id), { loginCodeHash: codeHash })
         })
+        currentStep = `ghi lô mã ${offset + 1}–${offset + chunk.length}`
         await batch.commit()
         successful.push(...chunk)
       }
@@ -224,8 +227,8 @@ function App() {
         notify(`Đã cấp ${successful.length} mã; phần còn lại gặp lỗi: ${error.message}`)
       } else {
         notify(error.code === 'permission-denied'
-          ? 'Firebase từ chối đọc hoặc ghi mã. Hãy kiểm tra Rules đã triển khai và tài khoản admin.'
-          : `Không cấp được mã: ${error.message}`)
+          ? `Firebase Rules từ chối bước “${currentStep}”. Hãy deploy Rules mới vào baubdhtntt; nếu vẫn lỗi, kiểm tra users/{UID} có active=true và role=admin.`
+          : `Lỗi ${currentStep} (${error.code || 'không rõ'}): ${error.message}`)
       }
     } finally {
       setIssuingCodes(false)
