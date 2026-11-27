@@ -19,7 +19,7 @@ Giao diện chờ cấu hình Firebase và dữ liệu Firestore; khi chưa cấ
 2. Đăng ký ứng dụng Web; sao chép `.env.example` thành `.env.local` và điền cấu hình Firebase.
 3. Thêm domain GitHub Pages tại Authentication → Settings → Authorized domains.
 4. Cài Firebase CLI (`npm install -g firebase-tools`), đăng nhập (`firebase login`) và liên kết dự án (`firebase use --add`).
-5. Tạo hồ sơ HDT tại `users/{uid}` với `name`, `email`, `sector`, `active: true`, `role: "voter"`. Tài khoản admin cần `role: "admin"`.
+5. Tài khoản admin cần `role: "admin"`. Sau khi triển khai Cloud Functions ở bước 8, admin có thể mở **Danh sách HDT → Thêm HDT** để nhập từng hồ sơ bằng biểu mẫu hoặc import Excel `.xlsx`/`.csv` (cột Họ tên, Ngành, Ngày sinh, Email). Ngành được chọn trong danh sách; ngày sinh là tùy chọn. Hồ sơ trùng tên và ngành sẽ được bỏ qua.
 6. Tạo `elections/current` với các trường: `name`, `term`, `description`, `status: "closed"`, `activeRound: 1`, `voterCount` (số HDT active), `round1VotedCount: 0`, `round2VotedCount: 0`.
 7. Tạo ứng viên trong `elections/current/candidates/{candidateId}` với `name`, `sector`, `active: true`, `electedRound1: false`.
 8. Cài và triển khai backend cùng Security Rules: chạy `npm install` trong `functions`, quay lại thư mục dự án rồi chạy `firebase deploy --only functions,firestore:rules`.

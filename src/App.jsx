@@ -18,8 +18,46 @@ const roles = [
   { icon: '♡', title: 'Trưởng Hiệp', category: 'Các ngành', color: 'coral' },
   { icon: '◎', title: 'Ủy viên Truyền thông', category: 'Các ngành', color: 'blue' },
 ]
+const sectors = ['Ngành Chiên', 'Ngành Ấu', 'Ngành Thiếu', 'Ngành Nghĩa', 'Ngành Hiệp', 'Ban Điều hành', 'Khác']
+const normalizeText = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/\s+/g, ' ')
+const normalizeSector = value => {
+  const key = normalizeText(value).replace(/^nganh\s+/, '')
+  if (key === 'bdh') return 'Ban Điều hành'
+  return sectors.find(sector => normalizeText(sector).replace(/^nganh\s+/, '') === key) || ''
+}
+const toDateInput = value => {
+  if (!value) return ''
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+  if (typeof value === 'number' && value > 0) {
+    const date = new Date(Date.UTC(1899, 11, 30) + value * 86400000)
+    return date.toISOString().slice(0, 10)
+  }
+  const text = String(value).trim()
+  const dmy = text.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})$/)
+  if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`
+  return text.match(/^\d{4}-\d{2}-\d{2}/)?.[0] || ''
+}
 
 function Avatar({ person, size = 'normal' }) { return <div className={`avatar ${person.color} ${size}`}>{person.initials}</div> }
+function parseCsvRows(text) {
+  const source = text.replace(/^\uFEFF/, '')
+  const firstLine = source.split(/\r?\n/, 1)[0] || ''
+  const delimiter = [',', ';', '\t'].sort((a, b) => firstLine.split(b).length - firstLine.split(a).length)[0]
+  const rows = []
+  let row = [], value = '', quoted = false
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index]
+    if (char === '"' && quoted && source[index + 1] === '"') { value += '"'; index += 1 }
+    else if (char === '"') quoted = !quoted
+    else if (char === delimiter && !quoted) { row.push(value); value = '' }
+    else if ((char === '\n' || char === '\r') && !quoted) {
+      if (char === '\r' && source[index + 1] === '\n') index += 1
+      row.push(value); rows.push(row); row = []; value = ''
+    } else value += char
+  }
+  if (value || row.length) { row.push(value); rows.push(row) }
+  return rows
+}
 function App() {
   const [tab, setTab] = useState('dashboard')
   const [round, setRound] = useState(1)
@@ -33,6 +71,13 @@ function App() {
   const [loginCode, setLoginCode] = useState('')
   const [loggingInWithCode, setLoggingInWithCode] = useState(false)
   const [issuedCode, setIssuedCode] = useState(null)
+  const [showAddMembers, setShowAddMembers] = useState(false)
+  const [memberEntry, setMemberEntry] = useState({ name: '', sector: '', birthDate: '', email: '' })
+  const [pendingMembers, setPendingMembers] = useState([])
+  const [memberInputMode, setMemberInputMode] = useState('manual')
+  const [importingMembers, setImportingMembers] = useState(false)
+  const [savingMembers, setSavingMembers] = useState(false)
+  const memberFileRef = useRef(null)
   const recaptchaRef = useRef(null)
   const [authUser, setAuthUser] = useState(null)
   const [profile, setProfile] = useState(null)
@@ -62,7 +107,8 @@ function App() {
     'permission-denied': 'Số điện thoại chưa được admin đăng ký trong danh sách HDT.',
     'functions/permission-denied': 'Mã không hợp lệ hoặc đã bị thu hồi. Hãy hỏi admin để cấp mã mới.',
     'functions/resource-exhausted': 'Có quá nhiều lần thử. Vui lòng đợi rồi thử lại.',
-    'functions/not-found': 'Chức năng đăng nhập mã chưa được triển khai trên Firebase. Admin cần deploy Cloud Functions.',
+    'functions/not-found': 'Cloud Function cần để lưu danh sách chưa được triển khai. Hãy chạy firebase deploy --only functions rồi thử lại.',
+    'functions/unauthenticated': 'Phiên đăng nhập đã hết hạn. Hãy đăng xuất rồi đăng nhập lại bằng tài khoản admin.',
   }[error.code] || error.message || 'Đăng nhập chưa thành công. Vui lòng thử lại.')
   const loginWithCode = async () => {
     if (!loginCode.trim()) return notify('Nhập mã đăng nhập do admin cấp.')
@@ -78,6 +124,83 @@ function App() {
       const response = await httpsCallable(functions, 'issueLoginCode')({ uid })
       setIssuedCode(response.data)
     } catch (error) { notify(authErrorText(error)) }
+  }
+  const addPendingMembers = voters => {
+    const key = voter => `${voter.name.trim().toLocaleLowerCase('vi')}|${voter.sector.trim().toLocaleLowerCase('vi')}`
+    setPendingMembers(current => {
+      const seen = new Set(current.map(key))
+      return [...current, ...voters.filter(voter => voter.name && !seen.has(key(voter)) && seen.add(key(voter)))]
+    })
+  }
+  const addManualMember = event => {
+    event.preventDefault()
+    if (!memberEntry.name.trim()) return notify('Vui lòng nhập họ tên Huynh trưởng.')
+    if (!memberEntry.sector) return notify('Vui lòng chọn ngành.')
+    if (pendingMembers.length >= 300) return notify('Mỗi lần chỉ thêm tối đa 300 Huynh trưởng.')
+    addPendingMembers([{ name: memberEntry.name.trim(), sector: memberEntry.sector, birthDate: memberEntry.birthDate, email: memberEntry.email.trim() }])
+    setMemberEntry({ name: '', sector: '', birthDate: '', email: '' })
+  }
+  const importMemberFile = async event => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    const fileName = file.name.toLowerCase()
+    if (!fileName.endsWith('.xlsx') && !fileName.endsWith('.csv')) return notify('Vui lòng chọn file Excel .xlsx hoặc .csv.')
+    if (file.size > 5 * 1024 * 1024) return notify('File Excel tối đa 5 MB.')
+    setImportingMembers(true)
+    try {
+      const rows = fileName.endsWith('.csv')
+        ? parseCsvRows(await file.text())
+        : await (await import('read-excel-file/browser')).readSheet(file)
+      const normalized = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
+      if (!rows.length) throw new Error('Trang tính đang trống.')
+      const headers = rows[0].map(normalized)
+      const nameColumn = headers.findIndex(value => /(^| )(ho ten|ho va ten|ten|name)( |$)/.test(value))
+      const hasHeader = nameColumn >= 0
+      const sectorColumn = hasHeader ? headers.findIndex(value => /^(nganh|nganh hoc|sector)$/.test(value)) : 1
+      const birthDateColumn = hasHeader ? headers.findIndex(value => /^(ngay sinh|birth date|birthdate|dob)$/.test(value)) : -1
+      const emailColumn = hasHeader ? headers.findIndex(value => /^(email|thu dien tu)$/.test(value)) : 2
+      const actualNameColumn = hasHeader ? nameColumn : 0
+      const records = rows.slice(hasHeader ? 1 : 0).map(row => ({
+        name: String(row[actualNameColumn] ?? '').trim(),
+        sector: sectorColumn >= 0 ? normalizeSector(row[sectorColumn]) : '',
+        birthDate: birthDateColumn >= 0 ? toDateInput(row[birthDateColumn]) : '',
+        email: emailColumn >= 0 ? String(row[emailColumn] ?? '').trim() : '',
+      })).filter(voter => voter.name)
+      if (!records.length) throw new Error('Không tìm thấy họ tên. Hãy để cột A là Họ tên.')
+      const missingSector = records.findIndex(voter => !voter.sector)
+      if (missingSector >= 0) throw new Error(`Thiếu ngành ở dòng dữ liệu ${missingSector + 1}. Hãy điền ngành cho từng người.`)
+      if (records.length + pendingMembers.length > 300) throw new Error('Danh sách tối đa 300 người mỗi lần thêm.')
+      addPendingMembers(records)
+      notify(`Đã đọc ${records.length} dòng từ ${file.name}. Hãy kiểm tra danh sách rồi lưu.`)
+    } catch (error) { notify(error.message || 'Không đọc được file Excel.') }
+    finally { setImportingMembers(false) }
+  }
+  const downloadMemberTemplate = () => {
+    const csv = '\uFEFFHọ tên,Ngành,Ngày sinh,Email\r\nNguyễn Văn An,Ngành Nghĩa,15/04/1995,an@example.com\r\n'
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'mau-danh-sach-HDT.csv'
+    link.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+  const addMembers = async () => {
+    if (!pendingMembers.length) return notify('Hãy nhập hoặc import danh sách HDT trước.')
+    setSavingMembers(true)
+    try {
+      const response = await httpsCallable(functions, 'adminAddVoters')({ voters: pendingMembers })
+      const { added, skipped } = response.data
+      setShowAddMembers(false)
+      setPendingMembers([])
+      setMemberEntry({ name: '', sector: '', birthDate: '', email: '' })
+      notify(`Đã thêm ${added} Huynh trưởng${skipped ? `; bỏ qua ${skipped} dòng trùng` : ''}.`)
+    } catch (error) {
+      notify(error.code === 'functions/permission-denied'
+        ? 'Tài khoản hiện tại chưa được nhận diện là admin trong hồ sơ users của dự án Firebase này.'
+        : authErrorText(error))
+    }
+    finally { setSavingMembers(false) }
   }
   const sendPhoneCode = async () => {
     const digits = phoneInput.replace(/[^\d+]/g, '')
@@ -219,10 +342,11 @@ function App() {
         {tab === 'vote' && <div className="vote-layout"><section className="panel ballot-panel"><div className="ballot-top"><div><span className="banner-kicker">PHIẾU BẦU CỬ · VÒNG {round}</span><h2>{round === 1 ? 'Chọn 11 thành viên Ban điều hành' : 'Chọn 5 thành viên Ban Thường vụ'}</h2><p>{round === 1 ? 'Chọn 11 Huynh trưởng mà bạn tín nhiệm. Bạn có thể tự bầu cho mình.' : 'Chọn 5 người trong danh sách 11 thành viên đã trúng cử.'}</p></div><div className="round-switch"><button className={round===1?'selected':''} onClick={() => {setRound(1);setSelected([])}}>Vòng 1</button><button className={round===2?'selected':''} onClick={() => {setRound(2);setSelected([])}}>Vòng 2</button></div></div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label><button className="filter-button"><SlidersHorizontal size={15}/> Tất cả ngành <ChevronDown size={14}/></button><span className="selection-count">Đã chọn <b>{selected.length}</b> / {maxSelection}</span></div><div className="candidate-grid">{ballotCandidates.filter(person=>`${person.name} ${person.sector}`.toLowerCase().includes(query.toLowerCase())).map(person=><button key={person.id} className={`candidate-card ${selected.includes(person.id)?'chosen':''}`} onClick={()=>selectCandidate(person.id)}><Avatar person={person}/><span className="candidate-name"><b>{person.name}</b><small>{person.sector}</small></span><span className={`checkbox ${selected.includes(person.id)?'checked':''}`}>{selected.includes(person.id)&&<Check size={13}/>}</span></button>)}</div><div className="ballot-footer"><span><ShieldCheck size={16}/> Phiếu bầu của bạn được bảo mật</span><button className="primary-button" onClick={submitBallot}>Xác nhận phiếu bầu <ChevronRight size={16}/></button></div></section><aside className="panel ballot-aside"><div className="aside-icon"><ClipboardList size={20}/></div><h3>Hướng dẫn bỏ phiếu</h3><ol><li><span>1</span><p>Chọn đúng <b>{maxSelection} Huynh trưởng</b> mà bạn tín nhiệm.</p></li><li><span>2</span><p>Bạn có thể <b>tự chọn chính mình</b> trong danh sách.</p></li><li><span>3</span><p>Kiểm tra lựa chọn trước khi nhấn xác nhận.</p></li><li><span>4</span><p>Sau khi gửi, phiếu bầu <b>không thể chỉnh sửa</b>.</p></li></ol><div className="aside-note"><ShieldCheck size={15}/><span>Mỗi Huynh trưởng chỉ được bỏ phiếu một lần trong mỗi vòng.</span></div><div className="aside-deadline"><Clock3 size={16}/><span>Hạn bỏ phiếu<b>24/11/2025 · 23:59</b></span></div></aside></div>}
         {tab === 'results' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">KỲ BẦU CỬ · {election?.term || 'Nhiệm kỳ chưa thiết lập'}</span><h2>Kết quả vòng {round}</h2><p>Công khai đầy đủ số phiếu của từng ứng viên.</p></div><button className="outline-button" onClick={()=>notify('Đang chuẩn bị biên bản kết quả...')}><Download size={16}/> Tải biên bản</button></div><div className="result-tabs"><button className={round===1?'selected':''} onClick={()=>setRound(1)}>Vòng 1 · Bầu 11 thành viên</button><button className={round===2?'selected':''} onClick={()=>setRound(2)}>Vòng 2 · Ban Thường vụ</button></div><div className="table-wrap"><table><thead><tr><th>HẠNG</th><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>SỐ PHIẾU</th><th>TỶ LỆ PHIẾU</th><th>KẾT QUẢ</th></tr></thead><tbody>{ranked.map((person,index)=><tr key={person.id}><td><span className={`rank ${index<(round===1?11:5)?'first':''}`}>{String(index+1).padStart(2,'0')}</span></td><td><div className="person-cell"><Avatar person={person} size="small"/><b>{person.name}</b></div></td><td><span className="sector-chip">{person.sector.replace('Ngành ','')}</span></td><td><b>{person.votes}</b> phiếu</td><td><div className="result-vote"><ProgressBar value={Math.round(person.votes/(ranked[0]?.votes || 1)*100)} color={index<(round===1?11:5)?'green':'gray'}/><span>{Math.round(person.votes/(voterCount || 1)*100)}%</span></div></td><td>{index<(round===1?11:5)?<span className="status-chip elected"><i/> Trúng cử</span>:<span className="status-chip pending">Chưa trúng cử</span>}</td></tr>)}</tbody></table></div><div className="aside-note">Vòng bầu cử và kết quả hòa cần được admin chốt trong Firestore; các thao tác quản trị sẽ được bổ sung riêng.</div></section>}
         {tab === 'roles' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">CƠ CẤU BAN ĐIỀU HÀNH</span><h2>Phân công chức vụ nhiệm kỳ</h2><p>Ban Thường vụ tự nhận 5 vị trí; phân công 6 vị trí ngành và truyền thông.</p></div><button className="primary-button" onClick={saveRoleAssignments}>Lưu phân công <Check size={15}/></button></div><div className="roles-grid">{roles.map((role,index)=>{const pool=index<5?ranked.filter(p=>p.elected).slice(0,5):ranked.filter(p=>p.elected).slice(5);return <div className="role-card" key={role.title}><div className={`role-symbol ${role.color}`}>{role.icon}</div><div className="role-detail"><span>{role.category}</span><b>{role.title}</b><select value={roleAssignments[role.title]||''} onChange={e=>setRoleAssignments({...roleAssignments,[role.title]:e.target.value})}><option value="">Chọn Huynh trưởng</option>{pool.map(person=><option value={person.id} key={person.id}>{person.name}</option>)}</select></div></div>})}</div><div className="aside-note"><ShieldCheck size={15}/> Phân công mẫu minh họa. Cần lưu xác nhận của Ban Thường vụ trước khi công bố.</div></section>}
-        {tab === 'members' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">DANH SÁCH CỬ TRI</span><h2>Huynh trưởng Xứ đoàn</h2><p>{members.length} tài khoản HDT · Dữ liệu Firestore</p></div><button className="primary-button" onClick={()=>notify('Thêm hồ sơ HDT trong Firebase Console trước, sau đó admin có thể cấp mã đăng nhập tại đây.')}>+ Hướng dẫn thêm</button></div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label></div><div className="table-wrap"><table><thead><tr><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>TRẠNG THÁI</th><th>VÒNG 1</th><th>VÒNG 2</th><th>MÃ ĐĂNG NHẬP</th></tr></thead><tbody>{members.filter(person=>`${person.name||person.email||''} ${person.sector||''}`.toLowerCase().includes(query.toLowerCase())).map(person=><tr key={person.id}><td><div className="person-cell"><Avatar person={{...person,initials:person.initials||String(person.name||person.email||'?').split(/\s+/).slice(-2).map(x=>x[0]).join('').toUpperCase(),color:person.color||'mint'}} size="small"/><b>{person.name||person.email}</b></div></td><td><span className="sector-chip">{person.sector||'—'}</span></td><td><span className={`status-chip ${person.active?'elected':'pending'}`}><i/> {person.active?'Hoạt động':'Chưa kích hoạt'}</span></td><td><span className="status-chip done">{person.round1Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><span className="status-chip pending">{person.round2Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><button className="outline-button" onClick={()=>issueLoginCode(person.id)}>Cấp / đổi mã</button></td></tr>)}</tbody></table>{!members.length&&<div className="empty-state">Chưa có tài khoản HDT trong Firestore.</div>}</div></section>}
+        {tab === 'members' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">DANH SÁCH CỬ TRI</span><h2>Huynh trưởng Xứ đoàn</h2><p>{members.length} tài khoản HDT · Dữ liệu Firestore</p></div><button className="primary-button" onClick={()=>setShowAddMembers(true)}>+ Thêm HDT</button></div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label></div><div className="table-wrap"><table><thead><tr><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>NGÀY SINH</th><th>TRẠNG THÁI</th><th>VÒNG 1</th><th>VÒNG 2</th><th>MÃ ĐĂNG NHẬP</th></tr></thead><tbody>{members.filter(person=>`${person.name||person.email||''} ${person.sector||''}`.toLowerCase().includes(query.toLowerCase())).map(person=><tr key={person.id}><td><div className="person-cell"><Avatar person={{...person,initials:person.initials||String(person.name||person.email||'?').split(/\s+/).slice(-2).map(x=>x[0]).join('').toUpperCase(),color:person.color||'mint'}} size="small"/><b>{person.name||person.email}</b></div></td><td><span className="sector-chip">{person.sector||'—'}</span></td><td>{person.birthDate?person.birthDate.split('-').reverse().join('/'):'—'}</td><td><span className={`status-chip ${person.active?'elected':'pending'}`}><i/> {person.active?'Hoạt động':'Chưa kích hoạt'}</span></td><td><span className="status-chip done">{person.round1Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><span className="status-chip pending">{person.round2Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><button className="outline-button" onClick={()=>issueLoginCode(person.id)}>Cấp / đổi mã</button></td></tr>)}</tbody></table>{!members.length&&<div className="empty-state">Chưa có tài khoản HDT trong Firestore.</div>}</div></section>}
         <footer className="footer"><span>© {new Date().getFullYear()} Đoàn Gioan Baotixita · Giáo xứ Bảo Sơn</span><div><span>Được xây dựng với <b>♥</b> và tinh thần phục vụ</span><i/> <button onClick={()=>notify(`Kết nối Firebase: ${firebaseConfigured?'đã cấu hình':'chưa cấu hình'}`)}>Phiên bản 1.0.0</button></div></footer>
       </div>
     </main>
+    {showAddMembers&&<div className="modal-backdrop"><section className="panel code-modal add-members-modal"><button className="modal-close" onClick={()=>setShowAddMembers(false)} aria-label="Đóng"><X size={18}/></button><div className="admin-icon"><Users size={18}/></div><h2>Thêm Huynh trưởng</h2><div className="member-input-tabs"><button className={memberInputMode==='manual'?'selected':''} onClick={()=>setMemberInputMode('manual')}>Nhập biểu mẫu</button><button className={memberInputMode==='excel'?'selected':''} onClick={()=>setMemberInputMode('excel')}>Import Excel</button></div>{memberInputMode==='manual'?<form className="member-entry-form" onSubmit={addManualMember}><label><span className="member-label-heading">Họ và tên <b>*</b></span><input autoFocus value={memberEntry.name} onChange={event=>setMemberEntry({...memberEntry,name:event.target.value})} placeholder="Ví dụ: Nguyễn Văn An"/></label><label><span className="member-label-heading">Ngành <b>*</b></span><select required value={memberEntry.sector} onChange={event=>setMemberEntry({...memberEntry,sector:event.target.value})}><option value="">Chọn ngành</option>{sectors.map(sector=><option key={sector} value={sector}>{sector}</option>)}</select></label><label>Ngày sinh <span>(không bắt buộc)</span><input type="date" value={memberEntry.birthDate} max={new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok'}).format(new Date())} onChange={event=>setMemberEntry({...memberEntry,birthDate:event.target.value})}/></label><label>Email <span>(không bắt buộc)</span><input type="email" value={memberEntry.email} onChange={event=>setMemberEntry({...memberEntry,email:event.target.value})} placeholder="ten@example.com"/></label><button className="outline-button" type="submit" disabled={pendingMembers.length>=300}>+ Thêm vào danh sách</button></form>:<div className="member-excel-import"><p>Chọn file Excel <b>.xlsx</b> hoặc CSV. Cột A là họ tên, B là ngành, C là ngày sinh, D là email. Có thể có dòng tiêu đề.</p><input ref={memberFileRef} type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onChange={importMemberFile} disabled={importingMembers||pendingMembers.length>=300}/><button type="button" className="template-download" onClick={downloadMemberTemplate}>Tải mẫu CSV (mở bằng Excel)</button>{importingMembers&&<small>Đang đọc file…</small>}</div>}{pendingMembers.length>0&&<div className="pending-members"><b>Danh sách chờ thêm ({pendingMembers.length})</b><ul>{pendingMembers.map((person,index)=><li key={`${person.name}-${index}`}><span><b>{person.name}</b><small>{person.sector||'Chưa chọn ngành'}{person.birthDate?` · ${person.birthDate.split('-').reverse().join('/')}`:''}{person.email?` · ${person.email}`:''}</small></span><button type="button" onClick={()=>setPendingMembers(items=>items.filter((_,itemIndex)=>itemIndex!==index))} aria-label={`Xóa ${person.name}`}><X size={15}/></button></li>)}</ul></div>}<small className="member-modal-note">Hồ sơ được kích hoạt ngay. Sau khi lưu, dùng nút “Cấp / đổi mã” để tạo mã đăng nhập riêng.</small><div className="add-members-actions"><button className="outline-button" onClick={()=>setShowAddMembers(false)} disabled={savingMembers}>Hủy</button><button className="primary-button" onClick={addMembers} disabled={savingMembers||importingMembers||!pendingMembers.length}>{savingMembers?'Đang lưu…':`Lưu ${pendingMembers.length||''} hồ sơ`}</button></div></section></div>}
     {issuedCode&&<div className="modal-backdrop"><section className="panel code-modal"><button className="modal-close" onClick={()=>setIssuedCode(null)}><X size={18}/></button><div className="admin-icon"><ShieldCheck size={18}/></div><h2>Mã đăng nhập đã cấp</h2><p>Gửi mã này riêng cho {issuedCode.name || 'Huynh trưởng'}. Mã cũ đã bị thu hồi. Mã chỉ hiển thị lần này.</p><code>{issuedCode.code}</code><button className="primary-button" onClick={()=>navigator.clipboard?.writeText(issuedCode.code).then(()=>notify('Đã sao chép mã.')).catch(()=>notify('Hãy chọn và sao chép mã thủ công.'))}>Sao chép mã</button></section></div>}
     {notice&&<div className="toast"><span><Check size={15}/></span>{notice}<button onClick={()=>setNotice('')}><X size={15}/></button></div>}
   </div>
