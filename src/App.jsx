@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bell, ChevronDown, ChevronRight, CircleHelp, ClipboardList, Download, Copy, LayoutDashboard, LogOut, Search, ShieldCheck, SlidersHorizontal, Users, Vote, X, Check, Clock3, ArrowUpRight, Menu } from 'lucide-react'
 import { firebaseConfigured, auth, db, functions } from './firebase.js'
 import { GoogleAuthProvider, onAuthStateChanged, signInAnonymously, signInWithPopup, signOut } from 'firebase/auth'
-import { collection, doc, getDoc, getDocs, onSnapshot, query as firestoreQuery, serverTimestamp, Timestamp, updateDoc, where, writeBatch } from 'firebase/firestore'
+import { collection, doc, getDoc, onSnapshot, serverTimestamp, Timestamp, updateDoc, writeBatch } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 
 const roles = [
@@ -192,28 +192,27 @@ function App() {
     const successful = []
     try {
       const expiresAt = Timestamp.fromMillis(Date.now() + 4 * 60 * 60 * 1000)
-      const activeCodes = await getDocs(firestoreQuery(collection(db, 'loginCodes'), where('active', '==', true)))
       const plans = await Promise.all(eligible.map(async person => {
         const code = createLoginCode()
         return { person, code, codeHash: await hashLoginCode(code), expiresAt }
       }))
       for (let offset = 0; offset < plans.length; offset += 200) {
         const chunk = plans.slice(offset, offset + 200)
-        const voterIds = new Set(chunk.map(plan => plan.person.id))
-        const previousCodes = activeCodes.docs.filter(item => voterIds.has(item.data().voterId) && item.data().claimedUid == null)
         const batch = writeBatch(db)
-        previousCodes.forEach(item => batch.update(item.ref, { active: false }))
-        chunk.forEach(({ person, codeHash }) => batch.set(doc(db, 'loginCodes', codeHash), {
-          voterId: person.id,
-          name: person.name,
-          email: person.email || '',
-          sector: person.sector,
-          birthDate: person.birthDate || '',
-          active: true,
-          claimedUid: null,
-          issuedAt: serverTimestamp(),
-          expiresAt,
-        }))
+        chunk.forEach(({ person, codeHash }) => {
+          batch.set(doc(db, 'loginCodes', codeHash), {
+            voterId: person.id,
+            name: person.name,
+            email: person.email || '',
+            sector: person.sector,
+            birthDate: person.birthDate || '',
+            active: true,
+            claimedUid: null,
+            issuedAt: serverTimestamp(),
+            expiresAt,
+          })
+          batch.update(doc(db, 'voterRoster', person.id), { loginCodeHash: codeHash })
+        })
         await batch.commit()
         successful.push(...chunk)
       }

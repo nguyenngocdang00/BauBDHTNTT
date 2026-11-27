@@ -35,6 +35,7 @@ service cloud.firestore {
         && get(voterPath(request.resource.data.voterId)).data.active == true
         && get(voterPath(request.resource.data.voterId)).data.name == request.resource.data.name
         && get(voterPath(request.resource.data.voterId)).data.sector == request.resource.data.sector
+        && getAfter(voterPath(request.resource.data.voterId)).data.loginCodeHash == request.resource.data.loginCodeHash
         && getAfter(codePath(request.resource.data.loginCodeHash)).data.email == request.resource.data.email
         && getAfter(codePath(request.resource.data.loginCodeHash)).data.birthDate == request.resource.data.birthDate
         && request.resource.data.loginCodeHash is string
@@ -65,7 +66,10 @@ service cloud.firestore {
     match /loginCodes/{codeHash} {
       allow get: if admin() || (anonymousUser() && (
         resource.data.claimedUid == request.auth.uid
-        || (resource.data.active == true && resource.data.claimedUid == null && resource.data.expiresAt > request.time)
+        || (resource.data.active == true
+          && resource.data.claimedUid == null
+          && resource.data.expiresAt > request.time
+          && get(voterPath(resource.data.voterId)).data.loginCodeHash == codeHash)
       ));
       allow list: if admin();
       allow create: if admin()
@@ -79,7 +83,8 @@ service cloud.firestore {
         && exists(voterPath(request.resource.data.voterId))
         && get(voterPath(request.resource.data.voterId)).data.active == true
         && request.resource.data.name == get(voterPath(request.resource.data.voterId)).data.name
-        && request.resource.data.sector == get(voterPath(request.resource.data.voterId)).data.sector;
+        && request.resource.data.sector == get(voterPath(request.resource.data.voterId)).data.sector
+        && getAfter(voterPath(request.resource.data.voterId)).data.loginCodeHash == codeHash;
       allow update: if admin() || (anonymousUser()
         && resource.data.active == true
         && resource.data.claimedUid == null
@@ -87,6 +92,7 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimedUid'])
         && request.resource.data.claimedUid == request.auth.uid
         && get(voterPath(resource.data.voterId)).data.active == true
+        && get(voterPath(resource.data.voterId)).data.loginCodeHash == codeHash
         && getAfter(userPath(request.auth.uid)).data.active == true
         && getAfter(userPath(request.auth.uid)).data.role == 'voter'
         && getAfter(userPath(request.auth.uid)).data.voterId == resource.data.voterId
