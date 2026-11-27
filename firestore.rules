@@ -2,25 +2,82 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function userPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
-    function activeVoter() {
-      return signedIn() && exists(userPath()) && get(userPath()).data.active == true;
-    }
+    function userPath(uid) { return /databases/$(database)/documents/users/$(uid); }
     function admin() {
-      return signedIn() && exists(userPath()) && get(userPath()).data.role == 'admin';
+      return signedIn() && exists(userPath(request.auth.uid))
+        && get(userPath(request.auth.uid)).data.active == true
+        && get(userPath(request.auth.uid)).data.role == 'admin';
     }
+    function activeVoter() {
+      return signedIn() && exists(userPath(request.auth.uid))
+        && get(userPath(request.auth.uid)).data.active == true;
+    }
+    function validSector(sector) {
+      return sector in ['Ngành Chiên', 'Ngành Ấu', 'Ngành Thiếu', 'Ngành Nghĩa', 'Ngành Hiệp', 'Ban Điều hành', 'Khác'];
+    }
+    function rosterPath(email) { return /databases/$(database)/documents/approvedVoters/$(email); }
 
     match /users/{uid} {
       allow read: if admin() || (signedIn() && request.auth.uid == uid);
-      // Add and change user roles only from trusted Firebase Admin SDK tooling.
-      allow write: if false;
+      allow create: if (
+        signedIn()
+        && request.auth.uid == uid
+        && request.auth.token.email_verified == true
+        && request.resource.data.keys().hasOnly(['name', 'email', 'sector', 'birthDate', 'active', 'role', 'createdAt'])
+        && request.resource.data.keys().hasAll(['name', 'email', 'sector', 'birthDate', 'active', 'role', 'createdAt'])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.active == true
+        && request.resource.data.role == 'voter'
+        && request.resource.data.createdAt == request.time
+        && getAfter(rosterPath(request.auth.token.email)).data.active == true
+        && getAfter(rosterPath(request.auth.token.email)).data.claimedBy == uid
+        && getAfter(rosterPath(request.auth.token.email)).data.name == request.resource.data.name
+        && getAfter(rosterPath(request.auth.token.email)).data.sector == request.resource.data.sector
+        && getAfter(rosterPath(request.auth.token.email)).data.birthDate == request.resource.data.birthDate
+      );
+      allow update, delete: if false;
+    }
+
+    match /approvedVoters/{email} {
+      allow get: if admin() || (
+        signedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == email
+      );
+      allow list: if admin();
+      allow create: if admin()
+        && request.resource.data.keys().hasOnly(['name', 'email', 'sector', 'birthDate', 'active', 'claimedBy', 'claimedAt', 'createdAt'])
+        && request.resource.data.keys().hasAll(['name', 'email', 'sector', 'birthDate', 'active', 'claimedBy', 'claimedAt', 'createdAt'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 120
+        && request.resource.data.email == email
+        && request.resource.data.sector is string
+        && validSector(request.resource.data.sector)
+        && request.resource.data.birthDate is string
+        && request.resource.data.active == true
+        && request.resource.data.claimedBy == null
+        && request.resource.data.claimedAt == null
+        && request.resource.data.createdAt == request.time;
+      allow update: if admin() || (
+        signedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == email
+        && resource.data.active == true
+        && resource.data.claimedBy == null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimedBy', 'claimedAt'])
+        && request.resource.data.claimedBy == request.auth.uid
+        && request.resource.data.claimedAt == request.time
+        && getAfter(userPath(request.auth.uid)).data.email == email
+        && getAfter(userPath(request.auth.uid)).data.role == 'voter'
+        && getAfter(userPath(request.auth.uid)).data.active == true
+      );
+      allow delete: if admin();
     }
 
     match /voterPhones/{phone} {
-      // Phone allowlist is private and maintained through the Firebase Console/Admin SDK.
       allow read, write: if false;
     }
-
     match /loginCodes/{codeHash} {
       allow read, write: if false;
     }
@@ -41,7 +98,6 @@ service cloud.firestore {
       }
       match /ballots/{uid}/rounds/{roundId} {
         allow read: if admin() || (activeVoter() && request.auth.uid == uid);
-        // Ballots are created only by the trusted submitBallot callable function.
         allow write: if false;
       }
       match /runoffs/{runoffId} {

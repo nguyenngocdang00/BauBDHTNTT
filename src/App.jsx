@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bell, ChevronDown, ChevronRight, CircleHelp, ClipboardList, Download, LayoutDashboard, LogOut, Search, ShieldCheck, SlidersHorizontal, Users, Vote, X, Check, Clock3, ArrowUpRight, Menu } from 'lucide-react'
 import { firebaseConfigured, auth, db, functions } from './firebase.js'
-import { GoogleAuthProvider, RecaptchaVerifier, onAuthStateChanged, signInWithCustomToken, signInWithPhoneNumber, signInWithPopup, signOut } from 'firebase/auth'
-import { collection, doc, getDoc, onSnapshot, updateDoc } from 'firebase/firestore'
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth'
+import { collection, doc, getDoc, onSnapshot, serverTimestamp, updateDoc, writeBatch } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 
 const roles = [
@@ -64,13 +64,6 @@ function App() {
   const [selected, setSelected] = useState([])
   const [query, setQuery] = useState('')
   const [notice, setNotice] = useState('')
-  const [phoneInput, setPhoneInput] = useState('')
-  const [smsCode, setSmsCode] = useState('')
-  const [smsConfirmation, setSmsConfirmation] = useState(null)
-  const [sendingSms, setSendingSms] = useState(false)
-  const [loginCode, setLoginCode] = useState('')
-  const [loggingInWithCode, setLoggingInWithCode] = useState(false)
-  const [issuedCode, setIssuedCode] = useState(null)
   const [showAddMembers, setShowAddMembers] = useState(false)
   const [memberEntry, setMemberEntry] = useState({ name: '', sector: '', birthDate: '', email: '' })
   const [pendingMembers, setPendingMembers] = useState([])
@@ -78,7 +71,6 @@ function App() {
   const [importingMembers, setImportingMembers] = useState(false)
   const [savingMembers, setSavingMembers] = useState(false)
   const memberFileRef = useRef(null)
-  const recaptchaRef = useRef(null)
   const [authUser, setAuthUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [authReady, setAuthReady] = useState(false)
@@ -90,7 +82,18 @@ function App() {
   const [candidates, setCandidates] = useState([])
   const [roleAssignments, setRoleAssignments] = useState({})
   const [members, setMembers] = useState([])
+  const [rosterMembers, setRosterMembers] = useState([])
   const isAdmin = profile?.role === 'admin'
+  const memberRows = useMemo(() => {
+    const profilesByEmail = new Map(members.filter(person => person.email).map(person => [person.email.toLowerCase(), person]))
+    const rosterEmails = new Set(rosterMembers.map(person => person.email.toLowerCase()))
+    const fromRoster = rosterMembers.map(person => {
+      const profile = profilesByEmail.get(person.email.toLowerCase())
+      return { ...person, ...profile, id: profile?.id || person.id, pendingAccount: !person.claimedBy }
+    })
+    const profileOnly = members.filter(person => !person.email || !rosterEmails.has(person.email.toLowerCase()))
+    return [...fromRoster, ...profileOnly]
+  }, [members, rosterMembers])
   const ranked = useMemo(() => candidates.filter(person => round === 1 || person.elected).map(person => ({ ...person, votes: roundTallies[person.id] || 0 })).sort((a, b) => b.votes - a.votes), [candidates, roundTallies, round])
   const filtered = ranked.filter(person => `${person.name} ${person.sector}`.toLowerCase().includes(query.toLowerCase()))
   const ballotCandidates = round === 1 ? candidates : candidates.filter(person => person.elected)
@@ -100,31 +103,13 @@ function App() {
   const pct = voterCount ? Math.round((votedCount / voterCount) * 100) : 0
   const notify = (message) => { setNotice(message); window.setTimeout(() => setNotice(''), 3000) }
   const authErrorText = error => ({
-    'auth/operation-not-allowed': 'Phương thức đăng nhập chưa được bật. Vào Firebase Console → Authentication → Sign-in method để bật Google và Phone.',
+    'auth/operation-not-allowed': 'Phương thức Google chưa được bật. Vào Firebase Console → Authentication → Sign-in method để bật Google.',
     'auth/unauthorized-domain': 'Tên miền trang web chưa được cho phép. Thêm GitHub Pages domain tại Authentication → Settings → Authorized domains.',
     'auth/popup-blocked': 'Trình duyệt chặn cửa sổ Google. Hãy cho phép popup rồi thử lại.',
     'auth/too-many-requests': 'Có nhiều lần thử liên tiếp. Vui lòng đợi một lúc rồi thử lại.',
     'permission-denied': 'Số điện thoại chưa được admin đăng ký trong danh sách HDT.',
-    'functions/permission-denied': 'Mã không hợp lệ hoặc đã bị thu hồi. Hãy hỏi admin để cấp mã mới.',
-    'functions/resource-exhausted': 'Có quá nhiều lần thử. Vui lòng đợi rồi thử lại.',
-    'functions/not-found': 'Cloud Function cần để lưu danh sách chưa được triển khai. Hãy chạy firebase deploy --only functions rồi thử lại.',
-    'functions/unauthenticated': 'Phiên đăng nhập đã hết hạn. Hãy đăng xuất rồi đăng nhập lại bằng tài khoản admin.',
   }[error.code] || error.message || 'Đăng nhập chưa thành công. Vui lòng thử lại.')
-  const loginWithCode = async () => {
-    if (!loginCode.trim()) return notify('Nhập mã đăng nhập do admin cấp.')
-    setLoggingInWithCode(true)
-    try {
-      const response = await httpsCallable(functions, 'redeemLoginCode')({ code: loginCode })
-      await signInWithCustomToken(auth, response.data.token)
-    } catch (error) { notify(authErrorText(error)) }
-    finally { setLoggingInWithCode(false) }
-  }
-  const issueLoginCode = async uid => {
-    try {
-      const response = await httpsCallable(functions, 'issueLoginCode')({ uid })
-      setIssuedCode(response.data)
-    } catch (error) { notify(authErrorText(error)) }
-  }
+  const signInGoogle = () => signInWithPopup(auth, new GoogleAuthProvider()).catch(error => notify(authErrorText(error)))
   const addPendingMembers = voters => {
     const key = voter => `${voter.name.trim().toLocaleLowerCase('vi')}|${voter.sector.trim().toLocaleLowerCase('vi')}`
     setPendingMembers(current => {
@@ -136,6 +121,7 @@ function App() {
     event.preventDefault()
     if (!memberEntry.name.trim()) return notify('Vui lòng nhập họ tên Huynh trưởng.')
     if (!memberEntry.sector) return notify('Vui lòng chọn ngành.')
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(memberEntry.email.trim())) return notify('Nhập email Google hợp lệ để Huynh trưởng đăng nhập.')
     if (pendingMembers.length >= 300) return notify('Mỗi lần chỉ thêm tối đa 300 Huynh trưởng.')
     addPendingMembers([{ name: memberEntry.name.trim(), sector: memberEntry.sector, birthDate: memberEntry.birthDate, email: memberEntry.email.trim() }])
     setMemberEntry({ name: '', sector: '', birthDate: '', email: '' })
@@ -157,9 +143,10 @@ function App() {
       const headers = rows[0].map(normalized)
       const nameColumn = headers.findIndex(value => /(^| )(ho ten|ho va ten|ten|name)( |$)/.test(value))
       const hasHeader = nameColumn >= 0
+      const headerlessHasBirthDate = !hasHeader && rows[0].length >= 4
       const sectorColumn = hasHeader ? headers.findIndex(value => /^(nganh|nganh hoc|sector)$/.test(value)) : 1
-      const birthDateColumn = hasHeader ? headers.findIndex(value => /^(ngay sinh|birth date|birthdate|dob)$/.test(value)) : -1
-      const emailColumn = hasHeader ? headers.findIndex(value => /^(email|thu dien tu)$/.test(value)) : 2
+      const birthDateColumn = hasHeader ? headers.findIndex(value => /^(ngay sinh|birth date|birthdate|dob)$/.test(value)) : headerlessHasBirthDate ? 2 : -1
+      const emailColumn = hasHeader ? headers.findIndex(value => /^(email|thu dien tu)$/.test(value)) : headerlessHasBirthDate ? 3 : 2
       const actualNameColumn = hasHeader ? nameColumn : 0
       const records = rows.slice(hasHeader ? 1 : 0).map(row => ({
         name: String(row[actualNameColumn] ?? '').trim(),
@@ -170,6 +157,8 @@ function App() {
       if (!records.length) throw new Error('Không tìm thấy họ tên. Hãy để cột A là Họ tên.')
       const missingSector = records.findIndex(voter => !voter.sector)
       if (missingSector >= 0) throw new Error(`Thiếu ngành ở dòng dữ liệu ${missingSector + 1}. Hãy điền ngành cho từng người.`)
+      const missingEmail = records.findIndex(voter => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(voter.email))
+      if (missingEmail >= 0) throw new Error(`Email thiếu hoặc không hợp lệ ở dòng dữ liệu ${missingEmail + 1}. Email cần trùng với tài khoản Google của HDT.`)
       if (records.length + pendingMembers.length > 300) throw new Error('Danh sách tối đa 300 người mỗi lần thêm.')
       addPendingMembers(records)
       notify(`Đã đọc ${records.length} dòng từ ${file.name}. Hãy kiểm tra danh sách rồi lưu.`)
@@ -189,39 +178,37 @@ function App() {
     if (!pendingMembers.length) return notify('Hãy nhập hoặc import danh sách HDT trước.')
     setSavingMembers(true)
     try {
-      const response = await httpsCallable(functions, 'adminAddVoters')({ voters: pendingMembers })
-      const { added, skipped } = response.data
+      const emails = pendingMembers.map(person => person.email.trim().toLowerCase())
+      if (new Set(emails).size !== emails.length) throw new Error('Có email bị lặp trong danh sách. Mỗi HDT cần một email Google riêng.')
+      const rosterRefs = emails.map(email => doc(db, 'approvedVoters', email))
+      const existing = await Promise.all(rosterRefs.map(getDoc))
+      const batch = writeBatch(db)
+      let added = 0
+      existing.forEach((snapshot, index) => {
+        if (snapshot.exists()) return
+        const voter = pendingMembers[index]
+        batch.set(rosterRefs[index], {
+          name: voter.name.trim(),
+          email: emails[index],
+          sector: voter.sector,
+          birthDate: voter.birthDate || '',
+          active: true,
+          claimedBy: null,
+          claimedAt: null,
+          createdAt: serverTimestamp(),
+        })
+        added += 1
+      })
+      if (added) await batch.commit()
+      const skipped = pendingMembers.length - added
       setShowAddMembers(false)
       setPendingMembers([])
       setMemberEntry({ name: '', sector: '', birthDate: '', email: '' })
-      notify(`Đã thêm ${added} Huynh trưởng${skipped ? `; bỏ qua ${skipped} dòng trùng` : ''}.`)
+      notify(`Đã thêm ${added} Huynh trưởng vào danh sách${skipped ? `; bỏ qua ${skipped} email đã có` : ''}.`)
     } catch (error) {
-      notify(error.code === 'functions/permission-denied'
-        ? 'Tài khoản hiện tại chưa được nhận diện là admin trong hồ sơ users của dự án Firebase này.'
-        : authErrorText(error))
+      notify(error.code === 'permission-denied' ? 'Firestore Rules chưa cho phép admin ghi danh sách. Hãy deploy firestore.rules mới.' : error.message || 'Chưa lưu được danh sách.')
     }
     finally { setSavingMembers(false) }
-  }
-  const sendPhoneCode = async () => {
-    const digits = phoneInput.replace(/[^\d+]/g, '')
-    const e164 = digits.startsWith('+') ? digits : digits.startsWith('0') ? `+84${digits.slice(1)}` : `+84${digits}`
-    if (e164.length < 11 || e164.length > 16) return notify('Vui lòng nhập số điện thoại hợp lệ, ví dụ 0912345678.')
-    setSendingSms(true)
-    try {
-      if (!recaptchaRef.current) recaptchaRef.current = new RecaptchaVerifier(auth, 'recaptcha-container', { size: 'invisible' })
-      const confirmation = await signInWithPhoneNumber(auth, e164, recaptchaRef.current)
-      setSmsConfirmation(confirmation)
-      notify('Đã gửi mã xác minh. Hãy kiểm tra tin nhắn SMS.')
-    } catch (error) {
-      recaptchaRef.current?.clear()
-      recaptchaRef.current = null
-      notify(authErrorText(error))
-    } finally { setSendingSms(false) }
-  }
-  const confirmPhoneCode = async () => {
-    if (!smsConfirmation || smsCode.trim().length < 6) return notify('Nhập mã xác minh 6 chữ số trong tin nhắn.')
-    try { await smsConfirmation.confirm(smsCode.trim()) }
-    catch (error) { notify(authErrorText(error)) }
   }
   useEffect(() => {
     if (!auth) { setAuthReady(true); return }
@@ -232,9 +219,30 @@ function App() {
       if (user && db) {
         try {
           let snap = await getDoc(doc(db, 'users', user.uid))
-          if (!snap.exists() && user.phoneNumber && functions) {
-            await httpsCallable(functions, 'claimPhoneVoter')()
-            snap = await getDoc(doc(db, 'users', user.uid))
+          if (!snap.exists() && user.email && user.emailVerified) {
+            const email = user.email.toLowerCase()
+            const rosterRef = doc(db, 'approvedVoters', email)
+            const rosterSnap = await getDoc(rosterRef)
+            if (rosterSnap.exists() && rosterSnap.data().active === true) {
+              const roster = rosterSnap.data()
+              if (roster.claimedBy && roster.claimedBy !== user.uid) {
+                notify('Email này đã được liên kết với tài khoản khác. Vui lòng liên hệ admin đoàn.')
+              } else {
+                const batch = writeBatch(db)
+                if (!roster.claimedBy) batch.update(rosterRef, { claimedBy: user.uid, claimedAt: serverTimestamp() })
+                batch.set(doc(db, 'users', user.uid), {
+                  name: roster.name,
+                  email,
+                  sector: roster.sector,
+                  birthDate: roster.birthDate || '',
+                  active: true,
+                  role: 'voter',
+                  createdAt: serverTimestamp(),
+                })
+                await batch.commit()
+                snap = await getDoc(doc(db, 'users', user.uid))
+              }
+            }
           }
           if (snap.exists()) setProfile(snap.data())
         } catch (error) { notify(`Không đọc được hồ sơ Firebase: ${error.message}`) }
@@ -263,6 +271,7 @@ function App() {
     }, fail))
     if (profile.role === 'admin') {
       unsubs.push(onSnapshot(collection(db, 'users'), snap => setMembers(snap.docs.map(item => ({ id: item.id, ...item.data() })).filter(item => item.role !== 'admin')), fail))
+      unsubs.push(onSnapshot(collection(db, 'approvedVoters'), snap => setRosterMembers(snap.docs.map(item => ({ id: item.id, ...item.data() })).filter(item => item.active === true)), fail))
     }
     const roundId = `round${round}`
     unsubs.push(onSnapshot(collection(db, 'elections', 'current', 'tallies', roundId, 'candidates'), snap => {
@@ -294,7 +303,11 @@ function App() {
       setVotedRounds(current => ({ ...current, [round]: true }))
       notify(`Phiếu vòng ${round} đã được ghi nhận thành công.`)
       setTab('dashboard')
-    } catch (error) { notify(error.message || 'Không gửi được phiếu bầu.') }
+    } catch (error) {
+      notify(error.code === 'functions/not-found'
+        ? 'Gửi phiếu hiện cần Cloud Functions; dự án Spark chưa có chức năng này được triển khai.'
+        : error.message || 'Không gửi được phiếu bầu.')
+    }
   }
   const saveRoleAssignments = async () => {
     if (!isAdmin) return notify('Chỉ admin đoàn mới có quyền lưu phân công.')
@@ -311,7 +324,7 @@ function App() {
   ]
   if (!firebaseConfigured || !auth || !db) return <div className="setup-screen"><section className="panel setup-card"><div className="brand-mark">✳</div><h1>Cần cấu hình Firebase</h1><p>Ứng dụng hiện chưa kết nối dự án Firebase nên không hiển thị dữ liệu mẫu hoặc nhận phiếu bầu.</p><p>Điền cấu hình ứng dụng Web trong <code>.env.local</code>, sau đó bật Authentication và Firestore.</p><small>Xem hướng dẫn thiết lập trong README.md</small></section></div>
   if (!authReady) return <div className="setup-screen"><section className="panel setup-card"><h1>Đang kiểm tra đăng nhập…</h1></section></div>
-  if (!authUser) return <div className="setup-screen"><section className="panel setup-card"><div className="brand-mark">✳</div><h1>Đăng nhập cổng bầu chọn</h1><p>Nhập mã riêng do admin đoàn cấp. Không cần tài khoản Google hoặc mã SMS.</p><div className="login-method"><b>Mã đăng nhập cá nhân</b><small>Admin gửi riêng mã cho bạn. Trình duyệt sẽ ghi nhớ đăng nhập sau lần đầu.</small><input className="login-input access-code-input" autoComplete="one-time-code" placeholder="VD: ABCD-EFGH-JKLM" value={loginCode} onChange={event=>setLoginCode(event.target.value.toUpperCase())} onKeyDown={event=>event.key==='Enter'&&loginWithCode()}/><button className="primary-button" onClick={loginWithCode} disabled={loggingInWithCode}>{loggingInWithCode?'Đang xác minh…':'Đăng nhập bằng mã'}</button></div><details className="login-alternatives"><summary>Cách đăng nhập khác</summary><div className="login-alt-content"><button className="outline-button login-google" onClick={() => signInWithPopup(auth, new GoogleAuthProvider()).catch(error => notify(authErrorText(error)))}>Tiếp tục với Google</button><div className="login-divider"><span>hoặc SMS</span></div><input className="login-input" type="tel" inputMode="tel" autoComplete="tel" placeholder="Số điện thoại, ví dụ 0912345678" value={phoneInput} onChange={event=>setPhoneInput(event.target.value)} disabled={!!smsConfirmation}/>{smsConfirmation&&<input className="login-input" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="Mã xác minh 6 số" value={smsCode} onChange={event=>setSmsCode(event.target.value)}/>}<button className="outline-button login-google" onClick={smsConfirmation?confirmPhoneCode:sendPhoneCode} disabled={sendingSms}>{sendingSms?'Đang gửi…':smsConfirmation?'Xác nhận mã SMS':'Gửi mã SMS'}</button><div id="recaptcha-container"/></div></details><small className="login-footnote">Mã chỉ đăng nhập được tài khoản HDT đã được admin kích hoạt.</small>{notice&&<small className="setup-error">{notice}</small>}</section></div>
+  if (!authUser) return <div className="setup-screen"><section className="panel setup-card"><div className="brand-mark">✳</div><h1>Đăng nhập cổng bầu chọn</h1><p>Đăng nhập bằng tài khoản Google có email đã được admin thêm vào danh sách HDT.</p><button className="primary-button login-google" onClick={signInGoogle}>Đăng nhập bằng Google</button><small className="login-footnote">Lần đầu đăng nhập, hệ thống tự liên kết email với hồ sơ HDT. Không dùng SMS hoặc mã đăng nhập trả phí.</small>{notice&&<small className="setup-error">{notice}</small>}</section></div>
   if (!profile?.active) return <div className="setup-screen"><section className="panel setup-card"><div className="brand-mark">✳</div><h1>Tài khoản chưa được duyệt</h1><p>{authUser.email} chưa được admin đoàn thêm vào danh sách HDT. Vui lòng liên hệ admin để kích hoạt quyền truy cập.</p><button className="outline-button" onClick={() => signOut(auth)}><LogOut size={16}/> Đăng xuất</button></section></div>
   return <div className="app-shell">
     <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
@@ -342,12 +355,11 @@ function App() {
         {tab === 'vote' && <div className="vote-layout"><section className="panel ballot-panel"><div className="ballot-top"><div><span className="banner-kicker">PHIẾU BẦU CỬ · VÒNG {round}</span><h2>{round === 1 ? 'Chọn 11 thành viên Ban điều hành' : 'Chọn 5 thành viên Ban Thường vụ'}</h2><p>{round === 1 ? 'Chọn 11 Huynh trưởng mà bạn tín nhiệm. Bạn có thể tự bầu cho mình.' : 'Chọn 5 người trong danh sách 11 thành viên đã trúng cử.'}</p></div><div className="round-switch"><button className={round===1?'selected':''} onClick={() => {setRound(1);setSelected([])}}>Vòng 1</button><button className={round===2?'selected':''} onClick={() => {setRound(2);setSelected([])}}>Vòng 2</button></div></div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label><button className="filter-button"><SlidersHorizontal size={15}/> Tất cả ngành <ChevronDown size={14}/></button><span className="selection-count">Đã chọn <b>{selected.length}</b> / {maxSelection}</span></div><div className="candidate-grid">{ballotCandidates.filter(person=>`${person.name} ${person.sector}`.toLowerCase().includes(query.toLowerCase())).map(person=><button key={person.id} className={`candidate-card ${selected.includes(person.id)?'chosen':''}`} onClick={()=>selectCandidate(person.id)}><Avatar person={person}/><span className="candidate-name"><b>{person.name}</b><small>{person.sector}</small></span><span className={`checkbox ${selected.includes(person.id)?'checked':''}`}>{selected.includes(person.id)&&<Check size={13}/>}</span></button>)}</div><div className="ballot-footer"><span><ShieldCheck size={16}/> Phiếu bầu của bạn được bảo mật</span><button className="primary-button" onClick={submitBallot}>Xác nhận phiếu bầu <ChevronRight size={16}/></button></div></section><aside className="panel ballot-aside"><div className="aside-icon"><ClipboardList size={20}/></div><h3>Hướng dẫn bỏ phiếu</h3><ol><li><span>1</span><p>Chọn đúng <b>{maxSelection} Huynh trưởng</b> mà bạn tín nhiệm.</p></li><li><span>2</span><p>Bạn có thể <b>tự chọn chính mình</b> trong danh sách.</p></li><li><span>3</span><p>Kiểm tra lựa chọn trước khi nhấn xác nhận.</p></li><li><span>4</span><p>Sau khi gửi, phiếu bầu <b>không thể chỉnh sửa</b>.</p></li></ol><div className="aside-note"><ShieldCheck size={15}/><span>Mỗi Huynh trưởng chỉ được bỏ phiếu một lần trong mỗi vòng.</span></div><div className="aside-deadline"><Clock3 size={16}/><span>Hạn bỏ phiếu<b>24/11/2025 · 23:59</b></span></div></aside></div>}
         {tab === 'results' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">KỲ BẦU CỬ · {election?.term || 'Nhiệm kỳ chưa thiết lập'}</span><h2>Kết quả vòng {round}</h2><p>Công khai đầy đủ số phiếu của từng ứng viên.</p></div><button className="outline-button" onClick={()=>notify('Đang chuẩn bị biên bản kết quả...')}><Download size={16}/> Tải biên bản</button></div><div className="result-tabs"><button className={round===1?'selected':''} onClick={()=>setRound(1)}>Vòng 1 · Bầu 11 thành viên</button><button className={round===2?'selected':''} onClick={()=>setRound(2)}>Vòng 2 · Ban Thường vụ</button></div><div className="table-wrap"><table><thead><tr><th>HẠNG</th><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>SỐ PHIẾU</th><th>TỶ LỆ PHIẾU</th><th>KẾT QUẢ</th></tr></thead><tbody>{ranked.map((person,index)=><tr key={person.id}><td><span className={`rank ${index<(round===1?11:5)?'first':''}`}>{String(index+1).padStart(2,'0')}</span></td><td><div className="person-cell"><Avatar person={person} size="small"/><b>{person.name}</b></div></td><td><span className="sector-chip">{person.sector.replace('Ngành ','')}</span></td><td><b>{person.votes}</b> phiếu</td><td><div className="result-vote"><ProgressBar value={Math.round(person.votes/(ranked[0]?.votes || 1)*100)} color={index<(round===1?11:5)?'green':'gray'}/><span>{Math.round(person.votes/(voterCount || 1)*100)}%</span></div></td><td>{index<(round===1?11:5)?<span className="status-chip elected"><i/> Trúng cử</span>:<span className="status-chip pending">Chưa trúng cử</span>}</td></tr>)}</tbody></table></div><div className="aside-note">Vòng bầu cử và kết quả hòa cần được admin chốt trong Firestore; các thao tác quản trị sẽ được bổ sung riêng.</div></section>}
         {tab === 'roles' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">CƠ CẤU BAN ĐIỀU HÀNH</span><h2>Phân công chức vụ nhiệm kỳ</h2><p>Ban Thường vụ tự nhận 5 vị trí; phân công 6 vị trí ngành và truyền thông.</p></div><button className="primary-button" onClick={saveRoleAssignments}>Lưu phân công <Check size={15}/></button></div><div className="roles-grid">{roles.map((role,index)=>{const pool=index<5?ranked.filter(p=>p.elected).slice(0,5):ranked.filter(p=>p.elected).slice(5);return <div className="role-card" key={role.title}><div className={`role-symbol ${role.color}`}>{role.icon}</div><div className="role-detail"><span>{role.category}</span><b>{role.title}</b><select value={roleAssignments[role.title]||''} onChange={e=>setRoleAssignments({...roleAssignments,[role.title]:e.target.value})}><option value="">Chọn Huynh trưởng</option>{pool.map(person=><option value={person.id} key={person.id}>{person.name}</option>)}</select></div></div>})}</div><div className="aside-note"><ShieldCheck size={15}/> Phân công mẫu minh họa. Cần lưu xác nhận của Ban Thường vụ trước khi công bố.</div></section>}
-        {tab === 'members' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">DANH SÁCH CỬ TRI</span><h2>Huynh trưởng Xứ đoàn</h2><p>{members.length} tài khoản HDT · Dữ liệu Firestore</p></div><button className="primary-button" onClick={()=>setShowAddMembers(true)}>+ Thêm HDT</button></div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label></div><div className="table-wrap"><table><thead><tr><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>NGÀY SINH</th><th>TRẠNG THÁI</th><th>VÒNG 1</th><th>VÒNG 2</th><th>MÃ ĐĂNG NHẬP</th></tr></thead><tbody>{members.filter(person=>`${person.name||person.email||''} ${person.sector||''}`.toLowerCase().includes(query.toLowerCase())).map(person=><tr key={person.id}><td><div className="person-cell"><Avatar person={{...person,initials:person.initials||String(person.name||person.email||'?').split(/\s+/).slice(-2).map(x=>x[0]).join('').toUpperCase(),color:person.color||'mint'}} size="small"/><b>{person.name||person.email}</b></div></td><td><span className="sector-chip">{person.sector||'—'}</span></td><td>{person.birthDate?person.birthDate.split('-').reverse().join('/'):'—'}</td><td><span className={`status-chip ${person.active?'elected':'pending'}`}><i/> {person.active?'Hoạt động':'Chưa kích hoạt'}</span></td><td><span className="status-chip done">{person.round1Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><span className="status-chip pending">{person.round2Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><button className="outline-button" onClick={()=>issueLoginCode(person.id)}>Cấp / đổi mã</button></td></tr>)}</tbody></table>{!members.length&&<div className="empty-state">Chưa có tài khoản HDT trong Firestore.</div>}</div></section>}
+        {tab === 'members' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">DANH SÁCH CỬ TRI</span><h2>Huynh trưởng Xứ đoàn</h2><p>{memberRows.length} hồ sơ HDT · Dữ liệu Firestore</p></div><button className="primary-button" onClick={()=>setShowAddMembers(true)}>+ Thêm HDT</button></div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label></div><div className="table-wrap"><table><thead><tr><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>NGÀY SINH</th><th>TÀI KHOẢN</th><th>VÒNG 1</th><th>VÒNG 2</th><th>TÀI KHOẢN GOOGLE</th></tr></thead><tbody>{memberRows.filter(person=>`${person.name||person.email||''} ${person.sector||''}`.toLowerCase().includes(query.toLowerCase())).map(person=><tr key={person.id}><td><div className="person-cell"><Avatar person={{...person,initials:person.initials||String(person.name||person.email||'?').split(/\s+/).slice(-2).map(x=>x[0]).join('').toUpperCase(),color:person.color||'mint'}} size="small"/><b>{person.name||person.email}</b></div></td><td><span className="sector-chip">{person.sector||'—'}</span></td><td>{person.birthDate?person.birthDate.split('-').reverse().join('/'):'—'}</td><td><span className={`status-chip ${person.active?'elected':'pending'}`}><i/> {person.active?'Hoạt động':'Chưa kích hoạt'}</span></td><td><span className="status-chip done">{person.round1Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><span className="status-chip pending">{person.round2Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><span className={`status-chip ${person.pendingAccount?'pending':'elected'}`}><i/> {person.pendingAccount?'Chờ đăng nhập':'Đã liên kết'}</span></td></tr>)}</tbody></table>{!memberRows.length&&<div className="empty-state">Chưa có hồ sơ HDT trong danh sách.</div>}</div></section>}
         <footer className="footer"><span>© {new Date().getFullYear()} Đoàn Gioan Baotixita · Giáo xứ Bảo Sơn</span><div><span>Được xây dựng với <b>♥</b> và tinh thần phục vụ</span><i/> <button onClick={()=>notify(`Kết nối Firebase: ${firebaseConfigured?'đã cấu hình':'chưa cấu hình'}`)}>Phiên bản 1.0.0</button></div></footer>
       </div>
     </main>
-    {showAddMembers&&<div className="modal-backdrop"><section className="panel code-modal add-members-modal"><button className="modal-close" onClick={()=>setShowAddMembers(false)} aria-label="Đóng"><X size={18}/></button><div className="admin-icon"><Users size={18}/></div><h2>Thêm Huynh trưởng</h2><div className="member-input-tabs"><button className={memberInputMode==='manual'?'selected':''} onClick={()=>setMemberInputMode('manual')}>Nhập biểu mẫu</button><button className={memberInputMode==='excel'?'selected':''} onClick={()=>setMemberInputMode('excel')}>Import Excel</button></div>{memberInputMode==='manual'?<form className="member-entry-form" onSubmit={addManualMember}><label><span className="member-label-heading">Họ và tên <b>*</b></span><input autoFocus value={memberEntry.name} onChange={event=>setMemberEntry({...memberEntry,name:event.target.value})} placeholder="Ví dụ: Nguyễn Văn An"/></label><label><span className="member-label-heading">Ngành <b>*</b></span><select required value={memberEntry.sector} onChange={event=>setMemberEntry({...memberEntry,sector:event.target.value})}><option value="">Chọn ngành</option>{sectors.map(sector=><option key={sector} value={sector}>{sector}</option>)}</select></label><label>Ngày sinh <span>(không bắt buộc)</span><input type="date" value={memberEntry.birthDate} max={new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok'}).format(new Date())} onChange={event=>setMemberEntry({...memberEntry,birthDate:event.target.value})}/></label><label>Email <span>(không bắt buộc)</span><input type="email" value={memberEntry.email} onChange={event=>setMemberEntry({...memberEntry,email:event.target.value})} placeholder="ten@example.com"/></label><button className="outline-button" type="submit" disabled={pendingMembers.length>=300}>+ Thêm vào danh sách</button></form>:<div className="member-excel-import"><p>Chọn file Excel <b>.xlsx</b> hoặc CSV. Cột A là họ tên, B là ngành, C là ngày sinh, D là email. Có thể có dòng tiêu đề.</p><input ref={memberFileRef} type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onChange={importMemberFile} disabled={importingMembers||pendingMembers.length>=300}/><button type="button" className="template-download" onClick={downloadMemberTemplate}>Tải mẫu CSV (mở bằng Excel)</button>{importingMembers&&<small>Đang đọc file…</small>}</div>}{pendingMembers.length>0&&<div className="pending-members"><b>Danh sách chờ thêm ({pendingMembers.length})</b><ul>{pendingMembers.map((person,index)=><li key={`${person.name}-${index}`}><span><b>{person.name}</b><small>{person.sector||'Chưa chọn ngành'}{person.birthDate?` · ${person.birthDate.split('-').reverse().join('/')}`:''}{person.email?` · ${person.email}`:''}</small></span><button type="button" onClick={()=>setPendingMembers(items=>items.filter((_,itemIndex)=>itemIndex!==index))} aria-label={`Xóa ${person.name}`}><X size={15}/></button></li>)}</ul></div>}<small className="member-modal-note">Hồ sơ được kích hoạt ngay. Sau khi lưu, dùng nút “Cấp / đổi mã” để tạo mã đăng nhập riêng.</small><div className="add-members-actions"><button className="outline-button" onClick={()=>setShowAddMembers(false)} disabled={savingMembers}>Hủy</button><button className="primary-button" onClick={addMembers} disabled={savingMembers||importingMembers||!pendingMembers.length}>{savingMembers?'Đang lưu…':`Lưu ${pendingMembers.length||''} hồ sơ`}</button></div></section></div>}
-    {issuedCode&&<div className="modal-backdrop"><section className="panel code-modal"><button className="modal-close" onClick={()=>setIssuedCode(null)}><X size={18}/></button><div className="admin-icon"><ShieldCheck size={18}/></div><h2>Mã đăng nhập đã cấp</h2><p>Gửi mã này riêng cho {issuedCode.name || 'Huynh trưởng'}. Mã cũ đã bị thu hồi. Mã chỉ hiển thị lần này.</p><code>{issuedCode.code}</code><button className="primary-button" onClick={()=>navigator.clipboard?.writeText(issuedCode.code).then(()=>notify('Đã sao chép mã.')).catch(()=>notify('Hãy chọn và sao chép mã thủ công.'))}>Sao chép mã</button></section></div>}
+    {showAddMembers&&<div className="modal-backdrop"><section className="panel code-modal add-members-modal"><button className="modal-close" onClick={()=>setShowAddMembers(false)} aria-label="Đóng"><X size={18}/></button><div className="admin-icon"><Users size={18}/></div><h2>Thêm Huynh trưởng</h2><div className="member-input-tabs"><button className={memberInputMode==='manual'?'selected':''} onClick={()=>setMemberInputMode('manual')}>Nhập biểu mẫu</button><button className={memberInputMode==='excel'?'selected':''} onClick={()=>setMemberInputMode('excel')}>Import Excel</button></div>{memberInputMode==='manual'?<form className="member-entry-form" onSubmit={addManualMember}><label><span className="member-label-heading">Họ và tên <b>*</b></span><input autoFocus value={memberEntry.name} onChange={event=>setMemberEntry({...memberEntry,name:event.target.value})} placeholder="Ví dụ: Nguyễn Văn An"/></label><label><span className="member-label-heading">Ngành <b>*</b></span><select required value={memberEntry.sector} onChange={event=>setMemberEntry({...memberEntry,sector:event.target.value})}><option value="">Chọn ngành</option>{sectors.map(sector=><option key={sector} value={sector}>{sector}</option>)}</select></label><label>Ngày sinh <span>(không bắt buộc)</span><input type="date" value={memberEntry.birthDate} max={new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok'}).format(new Date())} onChange={event=>setMemberEntry({...memberEntry,birthDate:event.target.value})}/></label><label>Email Google <b>*</b><input required type="email" value={memberEntry.email} onChange={event=>setMemberEntry({...memberEntry,email:event.target.value})} placeholder="ten@example.com"/></label><button className="outline-button" type="submit" disabled={pendingMembers.length>=300}>+ Thêm vào danh sách</button></form>:<div className="member-excel-import"><p>Chọn file Excel <b>.xlsx</b> hoặc CSV. Cột A là họ tên, B là ngành, C là ngày sinh, D là email. Email Google là bắt buộc, ngày sinh để trống nếu không biết. Có thể có dòng tiêu đề.</p><input ref={memberFileRef} type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onChange={importMemberFile} disabled={importingMembers||pendingMembers.length>=300}/><button type="button" className="template-download" onClick={downloadMemberTemplate}>Tải mẫu CSV (mở bằng Excel)</button>{importingMembers&&<small>Đang đọc file…</small>}</div>}{pendingMembers.length>0&&<div className="pending-members"><b>Danh sách chờ thêm ({pendingMembers.length})</b><ul>{pendingMembers.map((person,index)=><li key={`${person.name}-${index}`}><span><b>{person.name}</b><small>{person.sector||'Chưa chọn ngành'}{person.birthDate?` · ${person.birthDate.split('-').reverse().join('/')}`:''}{person.email?` · ${person.email}`:''}</small></span><button type="button" onClick={()=>setPendingMembers(items=>items.filter((_,itemIndex)=>itemIndex!==index))} aria-label={`Xóa ${person.name}`}><X size={15}/></button></li>)}</ul></div>}<small className="member-modal-note">Hồ sơ được kích hoạt ngay. HDT đăng nhập bằng Google với đúng email đã được duyệt.</small><div className="add-members-actions"><button className="outline-button" onClick={()=>setShowAddMembers(false)} disabled={savingMembers}>Hủy</button><button className="primary-button" onClick={addMembers} disabled={savingMembers||importingMembers||!pendingMembers.length}>{savingMembers?'Đang lưu…':`Lưu ${pendingMembers.length||''} hồ sơ`}</button></div></section></div>}
     {notice&&<div className="toast"><span><Check size={15}/></span>{notice}<button onClick={()=>setNotice('')}><X size={15}/></button></div>}
   </div>
 }

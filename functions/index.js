@@ -22,66 +22,6 @@ async function assertAdmin(uid) {
   }
 }
 
-exports.adminAddVoters = onCall(async request => {
-  if (!request.auth) throw new HttpsError('unauthenticated', 'Vui lòng đăng nhập tài khoản admin.')
-  await assertAdmin(request.auth.uid)
-  const voters = request.data?.voters
-  if (!Array.isArray(voters) || voters.length === 0 || voters.length > 300) {
-    throw new HttpsError('invalid-argument', 'Hãy nhập từ 1 đến 300 Huynh trưởng.')
-  }
-
-  const normalize = value => String(value || '').trim().toLocaleLowerCase('vi').replace(/\s+/g, ' ')
-  const normalizeSector = value => {
-    const key = normalize(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/^nganh\s+/, '')
-    return key === 'bdh' ? 'ban dieu hanh' : key
-  }
-  const validSectors = new Set(['Ngành Chiên', 'Ngành Ấu', 'Ngành Thiếu', 'Ngành Nghĩa', 'Ngành Hiệp', 'Ban Điều hành', 'Khác'])
-  const clean = []
-  const incoming = new Set()
-  for (const voter of voters) {
-    const name = typeof voter?.name === 'string' ? voter.name.trim().replace(/\s+/g, ' ') : ''
-    const sector = typeof voter?.sector === 'string' ? voter.sector.trim().replace(/\s+/g, ' ') : ''
-    const birthDate = typeof voter?.birthDate === 'string' ? voter.birthDate.trim() : ''
-    const email = typeof voter?.email === 'string' ? voter.email.trim().toLowerCase() : ''
-    if (!name || name.length > 120 || !validSectors.has(sector) || email.length > 254) {
-      throw new HttpsError('invalid-argument', 'Mỗi Huynh trưởng cần có họ tên và ngành hợp lệ; email tối đa 254 ký tự.')
-    }
-    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date())
-    if (birthDate && (!/^\d{4}-\d{2}-\d{2}$/.test(birthDate) || Number.isNaN(Date.parse(`${birthDate}T00:00:00Z`)) || new Date(`${birthDate}T00:00:00Z`).toISOString().slice(0, 10) !== birthDate || birthDate > today)) {
-      throw new HttpsError('invalid-argument', `Ngày sinh không hợp lệ của ${name}.`)
-    }
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      throw new HttpsError('invalid-argument', `Email không hợp lệ: ${email}`)
-    }
-    const key = `${normalize(name)}|${normalizeSector(sector)}`
-    if (!incoming.has(key)) {
-      incoming.add(key)
-      clean.push({ name, sector, birthDate, email, key })
-    }
-  }
-
-  const existing = await db.collection('users').get()
-  const known = new Set(existing.docs.map(snap => `${normalize(snap.data().name)}|${normalizeSector(snap.data().sector)}`))
-  const additions = clean.filter(voter => !known.has(voter.key))
-  if (additions.length) {
-    const batch = db.batch()
-    additions.forEach(voter => {
-      const ref = db.collection('users').doc()
-      batch.create(ref, {
-        name: voter.name,
-        sector: voter.sector,
-        birthDate: voter.birthDate,
-        email: voter.email,
-        active: true,
-        role: 'voter',
-        createdAt: FieldValue.serverTimestamp(),
-      })
-    })
-    await batch.commit()
-  }
-  return { added: additions.length, skipped: clean.length - additions.length }
-})
-
 async function applyCodeRateLimit(request) {
   const ip = request.rawRequest?.ip || 'unknown'
   const ref = db.doc(`loginCodeAttempts/${hashText(ip)}`)
