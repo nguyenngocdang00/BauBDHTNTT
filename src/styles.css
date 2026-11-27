@@ -3,3 +3,61 @@
 @media(max-width:1100px){.sidebar{width:220px}.main-area{margin-left:220px}.content{padding:26px 24px}.topbar{padding:0 24px}.stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.mid-grid{grid-template-columns:1fr}.vote-layout{grid-template-columns:minmax(0,1fr) 220px}.election-banner{gap:10px;padding:14px}.banner-deadline{min-width:145px}.banner-copy>span:last-child{max-width:360px}.help-button{font-size:9px}}
 @media(max-width:760px){.sidebar{transform:translateX(-100%);transition:transform .2s;width:265px;box-shadow:none}.sidebar.open{transform:translateX(0);box-shadow:12px 0 35px #17261622}.mobile-close{display:block}.scrim{display:block;position:fixed;inset:0;background:#19221855;border:0;z-index:2}.main-area{margin-left:0}.topbar{height:54px;padding:0 16px}.hamburger{display:block}.crumb{gap:7px}.cycle-pill{display:none}.top-actions{gap:11px}.content{padding:22px 16px}.welcome-line{align-items:flex-start}.welcome-line h1{font-size:21px}.welcome-line p{max-width:290px;line-height:1.5}.help-button{font-size:0;padding:8px}.help-button svg{width:17px;height:17px}.election-banner{display:grid;grid-template-columns:40px minmax(0,1fr);gap:9px 11px}.banner-copy{grid-column:2}.banner-copy b{font-size:13px}.banner-copy>span:last-child{line-height:1.5}.banner-separator{display:none}.banner-deadline{grid-column:1/2;grid-row:2;min-width:0}.banner-deadline span:last-child{font-size:7px;white-space:nowrap}.banner-cta{grid-column:2;grid-row:2;justify-self:start}.section-heading{margin-top:23px}.stat-grid{gap:8px}.stat-card{min-height:122px;padding:11px}.stat-label{font-size:8px}.stat-value{font-size:20px}.mid-grid{gap:9px}.footer{gap:8px;flex-wrap:wrap}.footer>div{flex-wrap:wrap}.vote-layout{grid-template-columns:1fr}.ballot-aside{order:2}.ballot-panel{padding:14px}.ballot-top{flex-direction:column}.round-switch{align-self:stretch}.round-switch button{flex:1}.ballot-toolbar{flex-wrap:wrap}.search-box{max-width:none;flex-basis:100%}.selection-count{margin-left:auto}.candidate-grid{grid-template-columns:1fr 1fr;max-height:none}.candidate-card{padding:7px}.candidate-card .avatar{width:29px;height:29px;font-size:8px}.candidate-name b{font-size:8px}.ballot-footer{gap:8px}.ballot-footer>span{max-width:130px;line-height:1.4}.results-panel{padding:14px}.results-header{align-items:flex-start;gap:10px}.results-header h2{font-size:15px}.outline-button,.results-header>.primary-button{font-size:0;padding:9px}.outline-button svg,.results-header>.primary-button svg{width:16px;height:16px}.roles-grid{grid-template-columns:1fr}.date-filter span{display:none}}
 @media(max-width:420px){.content{padding-inline:12px}.topbar{padding-inline:12px}.stat-grid{gap:7px}.stat-card{padding:9px;min-height:119px}.stat-icon{width:24px;height:24px}.stat-icon svg{width:15px}.stat-label{font-size:7px}.stat-value{font-size:18px}.welcome-line h1{font-size:19px}.candidate-grid{grid-template-columns:1fr}.candidate-card{padding:8px}.ballot-footer .primary-button{font-size:9px;padding:9px}.banner-deadline b{font-size:14px}}
+
+/* Readability pass: larger type, stronger contrast, and more room for content. */
+:root{--muted:#73796f}
+.content{max-width:1500px;padding-top:36px;padding-inline:44px}
+.sidebar{width:264px;padding-inline:17px}
+.main-area{margin-left:264px}
+.topbar{height:66px}
+.brand b{font-size:15px}.brand small{font-size:10px}
+.workspace-label,.nav-label{font-size:11px}
+.workspace-switch b{font-size:13px}.workspace-switch small{font-size:11px}
+.nav-item{font-size:14px;height:44px}
+.admin-toggle b,.profile b{font-size:12px}.admin-toggle small,.profile small{font-size:11px}
+.crumb{font-size:13px}.cycle-pill{font-size:10px}.content{font-size:14px}
+.welcome-line h1{font-size:30px}.welcome-line p{font-size:14px}
+.eyebrow,.banner-kicker{font-size:10px}
+.help-button,.date-filter,.outline-button{font-size:12px;padding:10px 13px}
+.election-banner{min-height:120px;padding:20px 24px;gap:18px}
+.banner-copy b{font-size:18px}.banner-copy>span:last-child{font-size:12px}
+.banner-deadline{min-width:200px}.banner-deadline span{font-size:10px}.banner-deadline b{font-size:20px}.banner-deadline b small{font-size:12px}
+.banner-cta,.primary-button{font-size:13px;padding:12px 15px}
+.section-heading h2{font-size:19px}.section-heading p{font-size:12px}
+.stat-card{min-height:152px;padding:17px}.stat-label{font-size:12px}.stat-value{font-size:29px}.stat-value small{font-size:12px}.stat-note{font-size:11px}.stat-change{font-size:10px}.status-chip{font-size:9px;padding:5px 8px}
+.panel-title h3{font-size:16px}.panel-title p{font-size:11px}.panel-title button{font-size:11px}
+.round-info>div:first-child>b{font-size:13px}.round-info p{font-size:11px}.round-info>small{font-size:10px}
+.panel-footer{font-size:10px}.panel-footer button{font-size:10px}
+.activity-row b{font-size:12px}.activity-row p{font-size:10px}.activity-row small{font-size:9px}
+th{font-size:9px;padding:10px}td{font-size:12px;padding:12px 10px}.rank{font-size:11px}.person-cell b{font-size:12px}.sector-chip{font-size:10px;padding:5px 9px}
+.footer{font-size:10px}.footer button{font-size:10px}
+.ballot-top h2,.results-header h2{font-size:21px}.ballot-top p,.results-header p{font-size:12px}
+.round-switch button,.result-tabs button{font-size:11px}
+.search-box input,.filter-button,.selection-count{font-size:11px}
+.candidate-name b{font-size:12px}.candidate-name small{font-size:10px}.candidate-card{padding:10px}.checkbox{width:18px;height:18px}
+.ballot-footer>span{font-size:10px}.ballot-aside h3{font-size:15px}.ballot-aside li p{font-size:11px}.ballot-aside li>span{width:21px;height:21px;font-size:10px}.aside-note{font-size:10px;padding:11px}.aside-deadline>span{font-size:10px}.aside-deadline b{font-size:11px}
+.result-vote span{font-size:10px}.role-detail>span{font-size:9px}.role-detail>b{font-size:11px}.role-detail select{font-size:10px;padding:8px}
+.toast{font-size:12px}
+@media(max-width:1100px){.sidebar{width:230px}.main-area{margin-left:230px}.content{padding-inline:25px}}
+@media(max-width:760px){.sidebar{width:280px}.main-area{margin-left:0}.content{padding:24px 16px}.topbar{height:58px}.welcome-line h1{font-size:25px}.welcome-line p{font-size:12px}.election-banner{padding:14px}.banner-copy b{font-size:15px}.banner-copy>span:last-child{font-size:10px}.banner-deadline span{font-size:9px}.banner-deadline b{font-size:16px}.banner-cta{font-size:11px;padding:10px}.stat-card{min-height:137px;padding:12px}.stat-label{font-size:10px}.stat-value{font-size:24px}.stat-note{font-size:9px}.panel-title h3{font-size:14px}.activity-row b{font-size:11px}.activity-row p{font-size:9px}.ballot-top h2,.results-header h2{font-size:18px}.candidate-name b{font-size:10px}.candidate-name small{font-size:9px}.ballot-footer>span{font-size:9px}.footer{font-size:9px}}
+@media(max-width:420px){.content{padding-inline:12px}.stat-label{font-size:9px}.stat-value{font-size:21px}.stat-note{font-size:8px}.candidate-name b{font-size:10px}}
+.setup-screen{min-height:100vh;display:grid;place-items:center;padding:24px;background:#f5f7f4}.setup-card{width:min(500px,100%);padding:32px}.setup-card h1{font:700 24px Manrope,sans-serif;margin:20px 0 10px}.setup-card p{font-size:14px;line-height:1.65;color:#72796f}.setup-card small{display:block;margin-top:14px;color:#878d82}.setup-card .primary-button,.setup-card .outline-button{margin-top:18px}.setup-error{color:#a34837!important}.empty-state{padding:24px;text-align:center;color:#858b80;font-size:13px}
+.login-method{margin-top:22px;padding:16px;border:1px solid #e8ece5;border-radius:8px;background:#fbfcfa}.login-method>b,.login-method>small{display:block}.login-method>b{font-size:14px}.login-method>small{font-size:12px;line-height:1.5}.login-input{display:block;width:100%;height:46px;margin-top:12px;padding:0 12px;border:1px solid #dfe5dc;border-radius:6px;background:#fff;font-size:16px;outline-color:#648769}.login-method .primary-button{width:100%;justify-content:center}.login-divider{display:flex;align-items:center;gap:12px;margin-top:18px;color:#92988e;font-size:12px}.login-divider:before,.login-divider:after{content:"";height:1px;background:#e9ece6;flex:1}.login-google{width:100%;justify-content:center}.login-footnote{line-height:1.5}
+.access-code-input{text-align:center;text-transform:uppercase;letter-spacing:2px;font:700 20px Manrope,sans-serif}.login-alternatives{margin-top:18px;border-top:1px solid #ecefe9;padding-top:13px;color:#667061;font-size:13px}.login-alternatives summary{cursor:pointer;font-weight:600}.login-alt-content{padding-top:14px}.login-alt-content .login-input{margin-top:10px}.modal-backdrop{position:fixed;inset:0;z-index:20;background:#18201877;display:grid;place-items:center;padding:20px}.code-modal{position:relative;width:min(440px,100%);padding:28px;text-align:center}.modal-close{position:absolute;right:13px;top:13px;border:0;background:transparent;color:#747a70}.code-modal .admin-icon{margin:auto}.code-modal h2{font:700 20px Manrope,sans-serif;margin:14px 0 8px}.code-modal p{font-size:13px;line-height:1.6;color:#72796f}.code-modal code{display:block;margin:18px 0;padding:15px 8px;border:1px dashed #9eb69a;border-radius:7px;background:#f4f8f2;color:#3e6844;font:700 22px Manrope,sans-serif;letter-spacing:2px}.code-modal .primary-button{margin:auto;justify-content:center}
+
+/* Second readability pass: increase supporting copy and table text slightly. */
+.brand small,.workspace-label,.nav-label,.workspace-switch small,.admin-toggle small,.profile small{font-size:12px}
+.nav-item{font-size:15px}
+.crumb,.welcome-line p,.section-heading p{font-size:14px}
+.eyebrow,.banner-kicker{font-size:11px}
+.banner-copy>span:last-child,.banner-deadline span{font-size:13px}
+.help-button,.date-filter,.outline-button,.banner-cta,.primary-button{font-size:14px}
+.stat-label{font-size:13px}.stat-note{font-size:12px}.stat-change,.status-chip{font-size:11px}
+.panel-title p,.panel-title button,.round-info p,.round-info>small,.activity-row p,.activity-row small{font-size:12px}
+th{font-size:10px}td,.person-cell b{font-size:13px}.rank{font-size:12px}.sector-chip{font-size:11px}
+.footer,.footer button{font-size:11px}
+.ballot-top p,.results-header p,.search-box input,.filter-button,.selection-count{font-size:13px}
+.candidate-name b{font-size:13px}.candidate-name small{font-size:11px}
+.ballot-footer>span,.ballot-aside li p,.aside-note,.aside-deadline>span{font-size:11px}
+.role-detail>span{font-size:10px}.role-detail>b,.role-detail select{font-size:12px}
+@media(max-width:760px){.nav-item{font-size:14px}.welcome-line p{font-size:12px}.banner-copy>span:last-child{font-size:11px}.banner-deadline span{font-size:9px}.help-button,.banner-cta,.primary-button{font-size:12px}.stat-label{font-size:11px}.stat-note{font-size:10px}.panel-title p,.activity-row p{font-size:10px}td,.person-cell b{font-size:12px}.candidate-name b{font-size:11px}.candidate-name small{font-size:10px}.ballot-top p,.results-header p{font-size:11px}}

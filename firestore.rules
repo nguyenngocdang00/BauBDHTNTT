@@ -2,35 +2,51 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function isAdmin() {
-      return signedIn() &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    function userPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function activeVoter() {
+      return signedIn() && exists(userPath()) && get(userPath()).data.active == true;
     }
-    function isVoter() {
-      return signedIn() &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true;
+    function admin() {
+      return signedIn() && exists(userPath()) && get(userPath()).data.role == 'admin';
     }
 
     match /users/{uid} {
-      allow read: if isAdmin() || (signedIn() && request.auth.uid == uid);
-      allow create, update, delete: if isAdmin();
+      allow read: if admin() || (signedIn() && request.auth.uid == uid);
+      // Add and change user roles only from trusted Firebase Admin SDK tooling.
+      allow write: if false;
     }
+
+    match /voterPhones/{phone} {
+      // Phone allowlist is private and maintained through the Firebase Console/Admin SDK.
+      allow read, write: if false;
+    }
+
+    match /loginCodes/{codeHash} {
+      allow read, write: if false;
+    }
+    match /loginCodeAttempts/{ipHash} {
+      allow read, write: if false;
+    }
+
     match /elections/{electionId} {
-      allow read: if isVoter();
-      allow write: if isAdmin();
+      allow read: if activeVoter();
+      allow write: if admin();
       match /candidates/{candidateId} {
-        allow read: if isVoter();
-        allow write: if isAdmin();
+        allow read: if activeVoter();
+        allow write: if admin();
       }
-      match /ballots/{ballotId} {
-        allow create: if isVoter() && ballotId == request.auth.uid
-          && request.resource.data.voterUid == request.auth.uid;
-        allow read: if isAdmin() || (signedIn() && ballotId == request.auth.uid);
-        allow update, delete: if isAdmin();
+      match /tallies/{roundId}/candidates/{candidateId} {
+        allow read: if activeVoter();
+        allow write: if false;
       }
-      match /results/{resultId} {
-        allow read: if isAdmin();
-        allow write: if isAdmin();
+      match /ballots/{uid}/rounds/{roundId} {
+        allow read: if admin() || (activeVoter() && request.auth.uid == uid);
+        // Ballots are created only by the trusted submitBallot callable function.
+        allow write: if false;
+      }
+      match /runoffs/{runoffId} {
+        allow read: if activeVoter();
+        allow write: if admin();
       }
     }
   }
