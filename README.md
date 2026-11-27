@@ -45,7 +45,11 @@ Tài khoản admin hiện đăng nhập bằng Google. Không bật đăng nhậ
 
 Admin mở mục **Kỳ bầu cử** để nhập tên kỳ, nhiệm kỳ, mô tả và hạn kết thúc. Nhấn **Lưu cấu hình**, sau đó chọn **Đồng bộ danh sách HDT** để đưa các Huynh trưởng đang hoạt động vào danh sách ứng viên. Có thể loại ứng viên trước khi mở vòng 1.
 
-Khi đã rà soát danh sách, nhấn **Mở vòng 1**. Sau khi đóng vòng 1, nhấn **Tổng hợp phiếu**. Nếu hòa ở vị trí thứ 11, phần **Tạo vòng phụ** gợi ý nhóm người hòa theo kết quả hiện có; admin chọn nhóm đồng phiếu, nhập số suất còn thiếu và hạn bỏ phiếu rồi mở đợt phụ. Ví dụ có 7 người chắc suất và 6 người cùng 9 phiếu tranh 4 suất, chọn cả 6 người và nhập 4. HDT bỏ một phiếu phụ riêng; phiếu và bảng điểm vòng 1 không bị sửa. Đóng vòng phụ, kiểm tra số phiếu, chọn đúng số người thắng rồi chốt để cập nhật danh sách 11. Khi đủ 11 người, nhấn **Mở vòng 2**. Đóng vòng khi hết hạn hoặc hoàn tất rồi tổng hợp kết quả vòng 2. Vòng phụ dùng các đường dẫn riêng `elections/current/runoffs/{id}/ballots` và `.../tallies`; cấu hình kỳ bầu cử và dữ liệu ballot/tally vòng 1 không đổi.
+Khi đã rà soát danh sách, nhấn **Mở vòng 1**. Sau khi đóng vòng 1, nhấn **Tổng hợp phiếu**. Nếu hòa ở vị trí thứ 11, phần **Tạo vòng phụ** gợi ý nhóm người hòa theo kết quả hiện có; admin chọn nhóm đồng phiếu, nhập số suất còn thiếu và hạn bỏ phiếu rồi mở đợt phụ. Ví dụ có 7 người chắc suất và 6 người cùng 9 phiếu tranh 4 suất, chọn cả 6 người và nhập 4. HDT bỏ một phiếu phụ riêng; phiếu và bảng điểm vòng 1 không bị sửa. Đóng vòng phụ, kiểm tra số phiếu, chọn đúng số người thắng rồi chốt để cập nhật danh sách 11. Khi đủ 11 người, nhấn **Mở vòng 2**. Sau khi đóng vòng 2 và tổng hợp phiếu, admin đánh dấu đúng 5 người trong mục **Chốt kết quả vòng 2** rồi xác nhận; danh sách 5 người được lưu riêng trên kỳ bầu cử, phiếu và tally vòng 2 không đổi. Phiếu phụ lưu dưới collection con `runoffs/{id}` của kỳ đang chọn; dữ liệu ballot/tally vòng 1 không đổi.
+
+## Nhiều kỳ bầu cử
+
+Mục **Kỳ bầu cử** có bộ chọn kỳ và nút **Tạo kỳ bầu cử mới**. Dữ liệu cũ `elections/current` được giữ nguyên; mỗi kỳ mới có document ID riêng cùng các collection ứng viên, phiếu và kết quả riêng. Kỳ đang được dùng chung lưu tại `appSettings/activeElection`, nên khi admin chuyển kỳ, trang của các thành viên cũng chuyển theo. Không cho đổi kỳ khi một vòng đang mở. Sau khi tạo kỳ mới, admin nhập tên/nhiệm kỳ, lưu cấu hình, đồng bộ danh sách HDT rồi mới mở vòng 1.
 
 ## Giới hạn chi phí và triển khai
 

@@ -40,8 +40,7 @@ service cloud.firestore {
       let requiredCount = round == 1 ? 11 : 5;
       let allowedIds = round == 1 ? election.round1CandidateIds : election.round2CandidateIds;
       let expectedBallotId = (round == 1 ? '1_' : '2_') + profile.voterId;
-      return electionId == 'current'
-        && activeVoter()
+      return activeVoter()
         && profile.voterId is string
         && profile.voterId.size() > 0
         && round in [1, 2]
@@ -65,8 +64,7 @@ service cloud.firestore {
     function validVoterCounterUpdate(electionId) {
       let profile = get(userPath(request.auth.uid)).data;
       let affected = request.resource.data.diff(resource.data).affectedKeys();
-      return electionId == 'current'
-        && activeVoter()
+      return activeVoter()
         && resource.data.status == 'open'
         && resource.data.endsAt > request.time
         && ((resource.data.activeRound == 1
@@ -85,8 +83,7 @@ service cloud.firestore {
       let runoff = get(runoffPath(electionId, runoffId)).data;
       let election = get(/databases/$(database)/documents/elections/$(electionId)).data;
       let candidateIds = request.resource.data.candidateIds;
-      return electionId == 'current'
-        && activeVoter()
+      return activeVoter()
         && profile.voterId is string
         && profile.voterId.size() > 0
         && voterId == profile.voterId
@@ -109,8 +106,7 @@ service cloud.firestore {
       let profile = get(userPath(request.auth.uid)).data;
       let affected = request.resource.data.diff(resource.data).affectedKeys();
       let election = get(/databases/$(database)/documents/elections/$(electionId)).data;
-      return electionId == 'current'
-        && activeVoter()
+      return activeVoter()
         && profile.voterId is string
         && profile.voterId.size() > 0
         && election.status == 'closed'
@@ -208,6 +204,11 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /appSettings/{settingId} {
+      allow read: if activeVoter();
+      allow create, update, delete: if admin() && settingId == 'activeElection';
+    }
+
     match /elections/{electionId} {
       allow read: if activeVoter();
       allow create, delete: if admin();
@@ -232,7 +233,6 @@ service cloud.firestore {
       match /runoffs/{runoffId} {
         allow read: if activeVoter();
         allow create: if admin()
-          && electionId == 'current'
           && get(/databases/$(database)/documents/elections/$(electionId)).data.status == 'closed'
           && get(/databases/$(database)/documents/elections/$(electionId)).data.activeRound == 1
           && request.resource.data.sourceRound == 1
