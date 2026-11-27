@@ -108,7 +108,7 @@ function App() {
   const [syncingCandidates, setSyncingCandidates] = useState(false)
   const [publishingResults, setPublishingResults] = useState(false)
   const liveTallies = useRef({})
-  const [roundTallies, setRoundTallies] = useState({})
+  const [talliesByRound, setTalliesByRound] = useState({})
   const [votedRounds, setVotedRounds] = useState({})
   const [loadingData, setLoadingData] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -129,6 +129,7 @@ function App() {
     return [...fromRoster, ...profileOnly]
   }, [members, rosterMembers])
   const codeableMembers = useMemo(() => rosterMembers.filter(person => person.active === true), [rosterMembers])
+  const roundTallies = talliesByRound[round] || {}
   const ranked = useMemo(() => candidates.filter(person => person.active !== false && (round === 1 || person.elected)).map(person => ({ ...person, votes: roundTallies[person.id] || 0 })).sort((a, b) => b.votes - a.votes), [candidates, roundTallies, round])
   const filtered = ranked.filter(person => `${person.name} ${person.sector}`.toLowerCase().includes(query.toLowerCase()))
   const ballotCandidates = candidates.filter(person => person.active !== false && (round === 1 || person.elected))
@@ -432,20 +433,22 @@ function App() {
         setBallotStatus(current => ({ ...current, ...result }))
       }, fail))
     }
-    const roundId = `round${round}`
-    unsubs.push(onSnapshot(collection(db, 'elections', 'current', 'tallies', roundId, 'candidates'), snap => {
-      const result = {}
-      snap.docs.forEach(item => { result[item.id] = item.data().votes || 0 })
-      liveTallies.current[roundId] = result
-      setRoundTallies(result)
-    }, fail))
+    for (const tallyRound of [1, 2]) {
+      const roundId = `round${tallyRound}`
+      unsubs.push(onSnapshot(collection(db, 'elections', 'current', 'tallies', roundId, 'candidates'), snap => {
+        const result = {}
+        snap.docs.forEach(item => { result[item.id] = item.data().votes || 0 })
+        liveTallies.current[roundId] = result
+        setTalliesByRound(current => ({ ...current, [tallyRound]: result }))
+      }, fail))
+    }
     if (profile.voterId) for (const ballotRound of [1, 2]) {
       unsubs.push(onSnapshot(doc(db, 'elections', 'current', 'ballots', `${ballotRound}_${profile.voterId}`), snap => {
         setVotedRounds(current => ({ ...current, [ballotRound]: snap.exists() }))
       }, fail))
     }
     return () => unsubs.forEach(unsubscribe => unsubscribe())
-  }, [authUser, profile?.active, profile?.role, round])
+  }, [authUser, profile?.active, profile?.role])
   useEffect(() => {
     if (election?.roles) setRoleAssignments(election.roles)
   }, [election?.roles])
@@ -734,13 +737,13 @@ function App() {
         <div className="election-banner"><div className="banner-pattern"/><div className="banner-icon"><Vote size={21}/></div><div className="banner-copy"><span className="banner-kicker">KỲ BẦU CỬ · {election?.term || 'Nhiệm kỳ chưa thiết lập'}</span><b>{election?.name || 'Bầu chọn Ban điều hành Xứ đoàn'}</b><span>{election?.description || 'Theo dõi kỳ bầu cử được cấu hình bởi admin đoàn.'}</span></div><div className="banner-separator"/><div className="banner-deadline"><span>TRẠNG THÁI</span><b>{election?.status === 'open' ? `Vòng ${election.activeRound}` : 'Chưa mở'}</b><span>{election?.endsAt?.toDate ? `Kết thúc ${election.endsAt.toDate().toLocaleString('vi-VN')}` : 'Chưa đặt thời hạn'}</span></div><button className="banner-cta" onClick={() => { setTab('vote'); setSelected([]) }} disabled={election?.status !== 'open' || votedRounds[election?.activeRound]}> {election?.status === 'open' ? votedRounds[election.activeRound] ? 'Đã bỏ phiếu' : 'Bắt đầu bầu chọn' : 'Chờ kỳ bầu cử'} <ArrowUpRight size={16}/></button></div>
         {tab === 'election' && isAdmin && <ElectionAdminPanel
           form={electionForm} setForm={setElectionForm} election={election}
-          rosterMembers={rosterMembers} candidates={candidates} roundTallies={roundTallies}
+          rosterMembers={rosterMembers} candidates={candidates}
           saving={savingElection} syncing={syncingCandidates}
           onSave={saveElectionConfiguration} onSync={syncCandidatesFromRoster}
           onToggleCandidate={toggleCandidate} onToggleElected={toggleElectedCandidate}
           onOpenRound1={openElectionRound1} onOpenRound2={openElectionRound2}
           onCloseRound={closeElectionRound} onPublishResults={publishRoundResults}
-          publishingResults={publishingResults}
+          publishingResults={publishingResults} round1Tallies={talliesByRound[1] || {}}
         />}
         {tab === 'dashboard' && <>
           <div className="section-heading"><div><h2>Tổng quan bầu cử</h2><p>Theo dõi tiến độ và thông tin kỳ bầu cử hiện tại</p></div><button className="date-filter">◷ <span>Toàn bộ thời gian</span><ChevronDown size={14}/></button></div>
@@ -762,8 +765,9 @@ function App() {
   </div>
 }
 
-function ElectionAdminPanel({form,setForm,election,rosterMembers,candidates,roundTallies,saving,syncing,publishingResults,onSave,onSync,onToggleCandidate,onToggleElected,onOpenRound1,onOpenRound2,onCloseRound,onPublishResults}) {
+function ElectionAdminPanel({form,setForm,election,rosterMembers,candidates,round1Tallies,saving,syncing,publishingResults,onSave,onSync,onToggleCandidate,onToggleElected,onOpenRound1,onOpenRound2,onCloseRound,onPublishResults}) {
   const activeCandidates = candidates.filter(person => person.active !== false)
+  const sortedCandidates = [...candidates].sort((a,b) => (round1Tallies[b.id]||0) - (round1Tallies[a.id]||0) || a.name.localeCompare(b.name,'vi'))
   const electedCandidates = activeCandidates.filter(person => person.elected)
   const isOpen = election?.status === 'open'
   return <div className="election-admin-grid">
@@ -784,9 +788,9 @@ function ElectionAdminPanel({form,setForm,election,rosterMembers,candidates,roun
       <div className="election-backend-warning"><ShieldCheck size={17}/><span><b>Gửi phiếu không cần Cloud Functions</b>Phiếu được Firestore Rules bảo vệ và chỉ admin đọc được. Khi admin đang đăng nhập, bảng tổng phiếu sẽ cập nhật trực tiếp; sau khi đóng vòng, nhấn “Tổng hợp phiếu” để chốt lại kết quả.</span></div>
     </section>
     <section className="panel election-candidates-panel">
-      <div className="results-header"><div><span className="banner-kicker">DANH SÁCH ỨNG VIÊN</span><h2>HDT được đưa vào vòng 1</h2><p>Đồng bộ từ danh sách HDT. Tắt những người không tham gia ứng cử.</p></div><button className="outline-button" onClick={onSync} disabled={syncing||isOpen}>{syncing?'Đang đồng bộ…':'Đồng bộ danh sách HDT'}</button></div>
+      <div className="results-header"><div><span className="banner-kicker">DANH SÁCH ỨNG VIÊN</span><h2>HDT được đưa vào vòng 1</h2><p>Sắp xếp theo số phiếu từ cao xuống thấp; người bằng phiếu xếp theo tên. Tắt những người không tham gia ứng cử.</p></div><button className="outline-button" onClick={onSync} disabled={syncing||isOpen}>{syncing?'Đang đồng bộ…':'Đồng bộ danh sách HDT'}</button></div>
       <div className="elected-summary"><b>Đã chốt trúng cử vòng 1: {electedCandidates.length} / 11</b><span>Đánh dấu đúng 11 người sau khi kiểm tra kết quả; xử lý hòa phiếu trước khi chốt.</span></div>
-      <div className="table-wrap"><table><thead><tr><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>PHIẾU VÒNG 1</th><th>ỨNG VIÊN VÒNG 1</th><th>TRÚNG CỬ</th></tr></thead><tbody>{candidates.map(person=><tr key={person.id} className={person.active===false?'inactive-candidate':''}><td><b>{person.name}</b></td><td>{person.sector||'—'}</td><td>{roundTallies[person.id]||0}</td><td><button className="outline-button" disabled={isOpen} onClick={()=>onToggleCandidate(person)}>{person.active===false?'Thêm lại':'Loại khỏi vòng 1'}</button></td><td><input type="checkbox" aria-label={`Đánh dấu ${person.name} trúng cử vòng 1`} checked={person.elected===true} disabled={isOpen||person.active===false} onChange={()=>onToggleElected(person)}/></td></tr>)}</tbody></table>{!candidates.length&&<div className="empty-state">Chưa có ứng viên. Hãy đồng bộ danh sách HDT.</div>}</div>
+      <div className="table-wrap"><table><thead><tr><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>PHIẾU VÒNG 1</th><th>ỨNG VIÊN VÒNG 1</th><th>TRÚNG CỬ</th></tr></thead><tbody>{sortedCandidates.map(person=><tr key={person.id} className={person.active===false?'inactive-candidate':''}><td><b>{person.name}</b></td><td>{person.sector||'—'}</td><td><b>{round1Tallies[person.id]||0}</b></td><td><button className="outline-button" disabled={isOpen} onClick={()=>onToggleCandidate(person)}>{person.active===false?'Thêm lại':'Loại khỏi vòng 1'}</button></td><td><input type="checkbox" aria-label={`Đánh dấu ${person.name} trúng cử vòng 1`} checked={person.elected===true} disabled={isOpen||person.active===false} onChange={()=>onToggleElected(person)}/></td></tr>)}</tbody></table>{!candidates.length&&<div className="empty-state">Chưa có ứng viên. Hãy đồng bộ danh sách HDT.</div>}</div>
     </section>
   </div>
 }
