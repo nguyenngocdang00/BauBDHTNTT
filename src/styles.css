@@ -90,3 +90,10 @@ th{font-size:10px}td,.person-cell b{font-size:13px}.rank{font-size:12px}.sector-
 .runoff-history{display:grid;gap:13px;margin-top:6px;padding-top:17px;border-top:1px solid #edf0eb}
 .runoff-action-row{padding-bottom:0}
 @media(max-width:760px){.runoff-create-form{grid-template-columns:1fr}.runoff-create-form>.primary-button{grid-column:auto}.runoff-suggestion{align-items:stretch;flex-direction:column}.runoff-suggestion .outline-button{justify-content:center}.runoff-candidate-picker{max-height:300px}}
+.round1-finalization{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:2px 0 8px;padding:13px 15px;border:1px solid #e7ecdf;border-radius:8px;background:#f7f9f5}
+.round1-finalization>div{min-width:0}
+.round1-finalization b,.round1-finalization small{display:block}
+.round1-finalization b{font-size:13px;color:#506d4f}
+.round1-finalization small{margin-top:4px;font-size:11px;line-height:1.45;color:#7b8475}
+.round1-finalization button{flex:0 0 auto}
+@media(max-width:600px){.round1-finalization{align-items:stretch;flex-direction:column}.round1-finalization button{justify-content:center}}
