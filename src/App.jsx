@@ -108,6 +108,7 @@ function App() {
   const [electionId, setElectionId] = useState('current')
   const [electionRecords, setElectionRecords] = useState([])
   const [creatingElection, setCreatingElection] = useState(false)
+  const [resettingElection, setResettingElection] = useState(false)
   const [election, setElection] = useState(null)
   const [electionForm, setElectionForm] = useState({ name: '', term: '', description: '', endsAt: '', round1Seats: '11', round2Seats: '5' })
   const [savingElection, setSavingElection] = useState(false)
@@ -811,6 +812,57 @@ function App() {
     } catch (error) { notify(`Không tạo được kỳ bầu cử mới: ${error.message}`) }
     finally { setCreatingElection(false) }
   }
+  const resetElectionData = async () => {
+    if (!isAdmin) return notify('Chỉ admin đoàn mới được đặt lại dữ liệu.')
+    if (!election) return notify('Chưa có dữ liệu kỳ bầu cử để đặt lại.')
+    if (election.status==='open'||activeRunoff) return notify('Hãy đóng vòng bầu chọn và vòng phụ đang mở trước khi đặt lại dữ liệu.')
+    const label=election.term||election.name||electionId
+    if (!window.confirm(`Đặt lại dữ liệu kỳ “${label}”? Thao tác sẽ xóa vĩnh viễn phiếu, kết quả, vòng phụ và danh sách ứng viên của riêng kỳ này. Danh sách HDT, tài khoản, thông tin nhiệm kỳ và số ghế sẽ được giữ nguyên.`)) return
+    const phrase=`RESET ${label}`
+    if (window.prompt(`Để xác nhận, hãy nhập chính xác:\n${phrase}`)!==phrase) return notify('Chưa đặt lại dữ liệu vì nội dung xác nhận không khớp.')
+    setResettingElection(true)
+    const deleteCollectionDocuments=async collectionRef=>{
+      const snapshot=await getDocs(collectionRef)
+      for(let offset=0;offset<snapshot.docs.length;offset+=450){
+        const batch=writeBatch(db)
+        snapshot.docs.slice(offset,offset+450).forEach(item=>batch.delete(item.ref))
+        await batch.commit()
+      }
+    }
+    try {
+      const electionRef=doc(db,'elections',electionId)
+      await deleteCollectionDocuments(collection(db,'elections',electionId,'ballots'))
+      await deleteCollectionDocuments(collection(db,'elections',electionId,'candidates'))
+      for(const roundNo of [1,2]) await deleteCollectionDocuments(collection(db,'elections',electionId,'tallies',`round${roundNo}`,'candidates'))
+      const runoffSnapshot=await getDocs(collection(db,'elections',electionId,'runoffs'))
+      for(const runoffDoc of runoffSnapshot.docs){
+        await deleteCollectionDocuments(collection(db,'elections',electionId,'runoffs',runoffDoc.id,'ballots'))
+        await deleteCollectionDocuments(collection(db,'elections',electionId,'runoffs',runoffDoc.id,'tallies'))
+      }
+      for(let offset=0;offset<runoffSnapshot.docs.length;offset+=450){
+        const batch=writeBatch(db)
+        runoffSnapshot.docs.slice(offset,offset+450).forEach(item=>batch.delete(item.ref))
+        await batch.commit()
+      }
+      const legacyRounds=await getDocs(collectionGroup(db,'rounds'))
+      const legacyDocs=legacyRounds.docs.filter(item=>item.ref.parent.parent?.id===electionId)
+      for(let offset=0;offset<legacyDocs.length;offset+=450){
+        const batch=writeBatch(db)
+        legacyDocs.slice(offset,offset+450).forEach(item=>batch.delete(item.ref))
+        await batch.commit()
+      }
+      await updateDoc(electionRef,{
+        status:'closed',activeRound:1,endsAt:null,voterCount:rosterMembers.length,
+        round1VotedCount:0,round2VotedCount:0,round1CandidateIds:[],round2CandidateIds:[],round1WinnerIds:[],round2WinnerIds:[],
+        round1Finalized:false,round2Finalized:false,round1FinalizedAt:deleteField(),round2FinalizedAt:deleteField(),roles:{},
+        resetAt:serverTimestamp(),resetBy:authUser.uid,
+      })
+      setBallotStatus({});setVotedRounds({});setTalliesByRound({});liveTallies.current={}
+      setRound(1);setSelected([]);setRunoffCandidateIds([]);setRunoffWinners([]);setRound2Winners([]);setRoleAssignments({})
+      notify('Đã đặt lại kỳ bầu cử. Danh sách HDT và tài khoản vẫn được giữ nguyên; hãy chọn lại ứng viên và nhập hạn bầu cử mới.')
+    } catch(error){notify(`Chưa đặt lại hoàn toàn dữ liệu: ${error.message}. Hãy kiểm tra Firestore Rules hoặc tải lại trang trước khi thử lại.`)}
+    finally{setResettingElection(false)}
+  }
   const openCandidatePicker = () => {
     if (!isAdmin) return notify('Chỉ admin đoàn mới được chọn ứng viên.')
     if (election?.status === 'open' || electionHistoryLocked) return notify('Danh sách ứng viên đã khóa vì kỳ này đã bắt đầu.')
@@ -1152,6 +1204,7 @@ function App() {
           <ElectionAdminPanel
             form={electionForm} setForm={setElectionForm} election={election}
             electionRecords={electionRecords} electionId={electionId} onSwitchElection={switchElection} onCreateElection={createElection} creatingElection={creatingElection}
+            onResetElection={resetElectionData} resettingElection={resettingElection} hasActiveRunoff={Boolean(activeRunoff)}
             historyLocked={electionHistoryLocked}
             rosterMembers={rosterMembers} candidates={candidates} runoffs={runoffs} round2Tallies={talliesByRound[2]||{}}
             round2Winners={round2Winners} setRound2Winners={setRound2Winners} onFinalizeRound2={finalizeRound2} finalizingRound2={finalizingRound2}
@@ -1197,7 +1250,7 @@ function App() {
   </div>
 }
 
-function ElectionAdminPanel({form,setForm,election,electionRecords,electionId,onSwitchElection,onCreateElection,creatingElection,historyLocked,rosterMembers,candidates,runoffs,round1Tallies,round2Tallies,round2Winners,setRound2Winners,onFinalizeRound2,finalizingRound2,finalizingRound1,onFinalizeRound1,saving,syncing,publishingResults,onSave,onOpenCandidatePicker,onToggleCandidate,onToggleElected,onOpenRound1,onOpenRound2,onCloseRound,onPublishResults,round1Seats,round2Seats}) {
+function ElectionAdminPanel({form,setForm,election,electionRecords,electionId,onSwitchElection,onCreateElection,creatingElection,onResetElection,resettingElection,hasActiveRunoff,historyLocked,rosterMembers,candidates,runoffs,round1Tallies,round2Tallies,round2Winners,setRound2Winners,onFinalizeRound2,finalizingRound2,finalizingRound1,onFinalizeRound1,saving,syncing,publishingResults,onSave,onOpenCandidatePicker,onToggleCandidate,onToggleElected,onOpenRound1,onOpenRound2,onCloseRound,onPublishResults,round1Seats,round2Seats}) {
   const activeCandidates = candidates.filter(person => person.active !== false)
   const rosterById = new Map(rosterMembers.map(person=>[person.id,person]))
   const sortedCandidates = candidates.filter(person=>person.active!==false&&rosterById.has(person.id)).map(person=>{
@@ -1218,7 +1271,7 @@ function ElectionAdminPanel({form,setForm,election,electionRecords,electionId,on
         <label>Số người được bầu vòng 2<input type="number" min="1" max={form.round1Seats||1} value={form.round2Seats} disabled={isOpen||historyLocked} onChange={event=>setForm({...form,round2Seats:event.target.value})}/><small>Không vượt quá số người đã trúng cử vòng 1.</small></label>
         <label>Hạn kết thúc vòng đang mở<input type="datetime-local" value={form.endsAt} disabled={isOpen||historyLocked} onChange={event=>setForm({...form,endsAt:event.target.value})}/><small>Giờ Việt Nam (UTC+7). Có thể cập nhật trước khi có phiếu.</small></label>
       </div>
-      <div className="election-config-actions"><span>{rosterMembers.length} HDT đang hoạt động · {activeCandidates.length} ứng viên{historyLocked?' · kỳ đã có dữ liệu, cấu hình được khóa':''}</span><button className="primary-button" onClick={onSave} disabled={saving||isOpen||historyLocked}>{saving?'Đang lưu…':'Lưu cấu hình'}</button></div>
+      <div className="reset-election-note"><ShieldCheck size={16}/><span>Đặt lại chỉ xóa phiếu, kết quả, vòng phụ và ứng viên của kỳ đang chọn. Danh sách HDT, tài khoản và cấu hình nhiệm kỳ được giữ nguyên.</span></div><div className="election-config-actions"><span>{rosterMembers.length} HDT đang hoạt động · {activeCandidates.length} ứng viên{historyLocked?' · kỳ đã có dữ liệu, cấu hình được khóa':''}</span><div className="election-config-buttons"><button className="danger-button" onClick={onResetElection} disabled={resettingElection||isOpen||hasActiveRunoff}>{resettingElection?'Đang đặt lại…':'Đặt lại dữ liệu kỳ này'}</button><button className="primary-button" onClick={onSave} disabled={saving||isOpen||historyLocked}>{saving?'Đang lưu…':'Lưu cấu hình'}</button></div></div>
     </section>
     <section className="panel election-round-panel">
       <div className="results-header"><div><span className="banner-kicker">ĐIỀU KHIỂN BẦU CỬ</span><h2>Các vòng bầu chọn</h2><p>Chỉ mở vòng sau khi đã kiểm tra danh sách và hạn kết thúc.</p></div><CalendarDays size={22}/></div>

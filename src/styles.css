@@ -100,3 +100,10 @@ th{font-size:10px}td,.person-cell b{font-size:13px}.rank{font-size:12px}.sector-
 .deactivate-button{border:1px solid #f0d6cf;border-radius:7px;background:#fff8f6;color:#a34e3b;padding:8px 10px;font-size:11px;font-weight:600;white-space:nowrap}
 .deactivate-button:hover:not(:disabled){background:#fbece7}
 .deactivate-button:disabled{opacity:.6;cursor:wait}
+.reset-election-note{display:flex;align-items:flex-start;gap:8px;margin-top:14px;padding:10px 12px;border:1px solid #f0dfbd;border-radius:7px;background:#fff9ec;color:#755f33;font-size:11px;line-height:1.5}
+.reset-election-note svg{flex:0 0 auto;margin-top:1px}
+.election-config-buttons{display:flex;align-items:center;gap:8px}
+.danger-button{border:1px solid #efd4cc;border-radius:7px;background:#fff8f6;color:#a34e3b;padding:9px 11px;font-size:11px;font-weight:700;white-space:nowrap}
+.danger-button:hover:not(:disabled){background:#fbece7}
+.danger-button:disabled{opacity:.6;cursor:not-allowed}
+@media(max-width:600px){.election-config-buttons{width:100%;align-items:stretch;flex-direction:column}.election-config-buttons button{justify-content:center;width:100%}}
