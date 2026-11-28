@@ -84,6 +84,7 @@ service cloud.firestore {
       let profile = get(userPath(request.auth.uid)).data;
       let runoff = get(runoffPath(electionId, runoffId)).data;
       let election = get(/databases/$(database)/documents/elections/$(electionId)).data;
+      let sourceRound = runoff.sourceRound;
       let candidateIds = request.resource.data.candidateIds;
       return activeVoter()
         && profile.voterId is string
@@ -98,8 +99,9 @@ service cloud.firestore {
         && candidateIds.toSet().size() == runoff.seats
         && candidateIds.hasOnly(runoff.candidateIds)
         && request.resource.data.submittedAt == request.time
+        && sourceRound in [1, 2]
         && election.status == 'closed'
-        && election.activeRound == 1
+        && election.activeRound == sourceRound
         && runoff.status == 'open'
         && runoff.endsAt > request.time
         && getAfter(runoffPath(electionId, runoffId)).data.votedCount == runoff.votedCount + 1;
@@ -107,12 +109,14 @@ service cloud.firestore {
     function validRunoffCounterUpdate(electionId, runoffId) {
       let profile = get(userPath(request.auth.uid)).data;
       let affected = request.resource.data.diff(resource.data).affectedKeys();
+      let runoff = get(runoffPath(electionId, runoffId)).data;
       let election = get(/databases/$(database)/documents/elections/$(electionId)).data;
       return activeVoter()
         && profile.voterId is string
         && profile.voterId.size() > 0
+        && runoff.sourceRound in [1, 2]
         && election.status == 'closed'
-        && election.activeRound == 1
+        && election.activeRound == runoff.sourceRound
         && resource.data.status == 'open'
         && resource.data.endsAt > request.time
         && affected.hasOnly(['votedCount'])
@@ -236,8 +240,8 @@ service cloud.firestore {
         allow read: if activeVoter();
         allow create: if admin()
           && get(/databases/$(database)/documents/elections/$(electionId)).data.status == 'closed'
-          && get(/databases/$(database)/documents/elections/$(electionId)).data.activeRound == 1
-          && request.resource.data.sourceRound == 1
+          && get(/databases/$(database)/documents/elections/$(electionId)).data.activeRound == request.resource.data.sourceRound
+          && request.resource.data.sourceRound in [1, 2]
           && request.resource.data.status == 'open'
           && request.resource.data.candidateIds is list
           && request.resource.data.candidateIds.size() >= 2
