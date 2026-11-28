@@ -25,9 +25,14 @@ service cloud.firestore {
       return profile.active == true && profile.role == 'admin';
     }
     function activeVoter() {
+      let profile = get(userPath(request.auth.uid)).data;
       return signedIn() && exists(userPath(request.auth.uid))
-        && get(userPath(request.auth.uid)).data.active == true
-        && get(userPath(request.auth.uid)).data.role in ['admin', 'voter'];
+        && profile.active == true
+        && (profile.role == 'admin'
+          || (profile.role == 'voter'
+            && profile.voterId is string
+            && exists(voterPath(profile.voterId))
+            && get(voterPath(profile.voterId)).data.active == true));
     }
     function validSector(sector) {
       return sector in ['Ngành Chiên', 'Ngành Ấu', 'Ngành Thiếu', 'Ngành Nghĩa', 'Ngành Hiệp', 'Ban Điều hành', 'Khác'];

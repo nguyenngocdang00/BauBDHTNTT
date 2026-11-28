@@ -97,3 +97,6 @@ th{font-size:10px}td,.person-cell b{font-size:13px}.rank{font-size:12px}.sector-
 .round1-finalization small{margin-top:4px;font-size:11px;line-height:1.45;color:#7b8475}
 .round1-finalization button{flex:0 0 auto}
 @media(max-width:600px){.round1-finalization{align-items:stretch;flex-direction:column}.round1-finalization button{justify-content:center}}
+.deactivate-button{border:1px solid #f0d6cf;border-radius:7px;background:#fff8f6;color:#a34e3b;padding:8px 10px;font-size:11px;font-weight:600;white-space:nowrap}
+.deactivate-button:hover:not(:disabled){background:#fbece7}
+.deactivate-button:disabled{opacity:.6;cursor:wait}

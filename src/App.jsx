@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bell, ChevronDown, ChevronRight, CircleHelp, ClipboardList, Download, Copy, LayoutDashboard, LogOut, Search, ShieldCheck, SlidersHorizontal, Users, Vote, X, Check, Clock3, ArrowUpRight, Menu, Settings, CalendarDays } from 'lucide-react'
 import { firebaseConfigured, auth, db } from './firebase.js'
 import { GoogleAuthProvider, onAuthStateChanged, signInAnonymously, signInWithPopup, signOut } from 'firebase/auth'
-import { addDoc, collection, collectionGroup, doc, getDoc, getDocs, onSnapshot, runTransaction, serverTimestamp, setDoc, Timestamp, updateDoc, writeBatch } from 'firebase/firestore'
+import { addDoc, collection, collectionGroup, deleteField, doc, getDoc, getDocs, onSnapshot, runTransaction, serverTimestamp, setDoc, Timestamp, updateDoc, writeBatch } from 'firebase/firestore'
 
 const roles = [
   { icon: '✳', title: 'Trưởng đoàn', category: 'Ban Thường vụ', color: 'coral' },
@@ -132,9 +132,11 @@ function App() {
   const [candidates, setCandidates] = useState([])
   const [roleAssignments, setRoleAssignments] = useState({})
   const [members, setMembers] = useState([])
-  const [rosterMembers, setRosterMembers] = useState([])
+  const [rosterRecords, setRosterRecords] = useState([])
+  const [deactivatingMemberId, setDeactivatingMemberId] = useState('')
   const [ballotStatus, setBallotStatus] = useState({})
   const isAdmin = profile?.role === 'admin'
+  const rosterMembers = useMemo(() => rosterRecords.filter(person=>person.active===true), [rosterRecords])
   const electionHistoryLocked = Boolean((election?.round1VotedCount||0)>0||(election?.round2VotedCount||0)>0||election?.round1Finalized||election?.round2Finalized||election?.activeRound>1||runoffs.length||Object.values(ballotStatus).some(status=>status?.[1]||status?.[2]))
   const activeRunoff = runoffs.find(item => item.status === 'open') || null
   const displayedRunoff = activeRunoff || [...runoffs].sort((a,b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))[0] || null
@@ -145,14 +147,14 @@ function App() {
   const resultRunoffTallies = runoffTalliesById[resultRunoff?.id] || {}
   const memberRows = useMemo(() => {
     const profilesByVoterId = new Map(members.filter(person => person.voterId).map(person => [person.voterId, person]))
-    const rosterIds = new Set(rosterMembers.map(person => person.id))
-    const fromRoster = rosterMembers.map(person => {
+    const rosterIds = new Set(rosterRecords.map(person => person.id))
+    const fromRoster = rosterRecords.map(person => {
       const profile = profilesByVoterId.get(person.id)
-      return { ...person, ...profile, id: person.id, pendingAccount: !profile, rosterRecord: true }
+      return { ...person, ...profile, id: person.id, active:person.active===true, pendingAccount: !profile, rosterRecord: true }
     })
     const profileOnly = members.filter(person => !person.voterId || !rosterIds.has(person.voterId)).map(person => ({ ...person, rosterRecord: false }))
     return [...fromRoster, ...profileOnly]
-  }, [members, rosterMembers])
+  }, [members, rosterRecords])
   const codeableMembers = useMemo(() => rosterMembers.filter(person => person.active === true), [rosterMembers])
   const filteredCandidateRoster = useMemo(() => {
     const search=normalizeText(candidatePickerSearch)
@@ -301,6 +303,21 @@ function App() {
     }
   }
   const issueLoginCode = person => issueLoginCodes([person])
+  const setMemberActive = async person => {
+    if (!isAdmin || !person.rosterRecord) return notify('Chỉ có thể thay đổi quyền của hồ sơ trong danh sách HDT.')
+    const nextActive = person.active !== true
+    if (election?.status==='open'||activeRunoff) return notify('Hãy đóng vòng bầu chọn và vòng phụ đang mở trước khi đổi trạng thái HDT.')
+    const hasVoted = Boolean(ballotStatus[person.id]?.[1]||ballotStatus[person.id]?.[2]||person.round1Voted||person.round2Voted)
+    if (!nextActive && !window.confirm(`Ngừng kích hoạt tài khoản của ${person.name||'HDT này'}? Người này sẽ không thể đăng nhập hoặc bỏ phiếu nữa.${hasVoted?' Phiếu đã gửi vẫn được giữ nguyên và vẫn tính vào kết quả.':''}`)) return
+    setDeactivatingMemberId(person.id)
+    try {
+      await updateDoc(doc(db,'voterRoster',person.id),nextActive
+        ? {active:true,reactivatedAt:serverTimestamp(),reactivatedBy:authUser.uid}
+        : {active:false,loginCodeHash:deleteField(),deactivatedAt:serverTimestamp(),deactivatedBy:authUser.uid})
+      notify(nextActive?`Đã kích hoạt lại ${person.name}. Hãy cấp mã đăng nhập mới.`:`Đã ngừng kích hoạt ${person.name}. Phiếu đã gửi được giữ nguyên.`)
+    } catch (error) { notify(`Không đổi được trạng thái tài khoản: ${error.message}`) }
+    finally { setDeactivatingMemberId('') }
+  }
   const copyIssuedCodes = () => {
     if (!issuedCodes.length) return
     const lines = issuedCodes.map(item => `${item.person.name} | ${item.person.sector} | ${item.code}`)
@@ -464,7 +481,15 @@ function App() {
     if (!db || !authUser || !profile?.active) return
     setLoadingData(true)
     const unsubs = []
-    const fail = error => { setLoadingData(false); notify(`Lỗi đọc Firestore: ${error.message}`) }
+    const fail = error => {
+      setLoadingData(false)
+      if (error.code==='permission-denied'&&profile.role==='voter') {
+        notify('Tài khoản đã ngừng hoạt động hoặc không còn quyền truy cập. Phiếu đã gửi vẫn được lưu.')
+        signOut(auth).catch(()=>{})
+        return
+      }
+      notify(`Lỗi đọc Firestore: ${error.message}`)
+    }
     unsubs.push(onSnapshot(doc(db, 'elections', electionId), snap => {
       const electionData = snap.exists() ? snap.data() : null
       setElection(electionData)
@@ -484,7 +509,7 @@ function App() {
     }, fail))
     if (profile.role === 'admin') {
       unsubs.push(onSnapshot(collection(db, 'users'), snap => setMembers(snap.docs.map(item => ({ id: item.id, ...item.data() })).filter(item => item.role !== 'admin')), fail))
-      unsubs.push(onSnapshot(collection(db, 'voterRoster'), snap => setRosterMembers(snap.docs.map(item => ({ id: item.id, ...item.data() })).filter(item => item.active === true)), fail))
+      unsubs.push(onSnapshot(collection(db, 'voterRoster'), snap => setRosterRecords(snap.docs.map(item => ({ id: item.id, ...item.data() }))), fail))
       unsubs.push(onSnapshot(collection(db, 'elections', electionId, 'ballots'), snap => {
         const result = {}
         snap.docs.forEach(item => {
@@ -1161,7 +1186,7 @@ function App() {
           {resultRunoff?.status==='closed'&&<RunoffPublicResults runoff={resultRunoff} candidates={candidates} originalTallies={talliesByRound[resultRunoff.sourceRound||1]||{}} runoffTallies={resultRunoffTallies}/>}
         </>}
         {tab === 'roles' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">CƠ CẤU BAN ĐIỀU HÀNH</span><h2>Phân công chức vụ nhiệm kỳ</h2><p>Chức vụ được phân công theo cơ cấu hiện tại; danh sách thành viên lấy theo số ghế đã cấu hình cho từng vòng.</p></div><button className="primary-button" onClick={saveRoleAssignments}>Lưu phân công <Check size={15}/></button></div><div className="roles-grid">{roles.map((role,index)=>{const pool=index<5?ranked.filter(p=>p.elected).slice(0,round2Seats):ranked.filter(p=>p.elected).slice(round2Seats);return <div className="role-card" key={role.title}><div className={`role-symbol ${role.color}`}>{role.icon}</div><div className="role-detail"><span>{role.category}</span><b>{role.title}</b><select value={roleAssignments[role.title]||''} onChange={e=>setRoleAssignments({...roleAssignments,[role.title]:e.target.value})}><option value="">Chọn Huynh trưởng</option>{pool.map(person=><option value={person.id} key={person.id}>{person.name}</option>)}</select></div></div>})}</div><div className="aside-note"><ShieldCheck size={15}/> Phân công mẫu minh họa. Cần lưu xác nhận của Ban Thường vụ trước khi công bố.</div></section>}
-        {tab === 'members' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">DANH SÁCH CỬ TRI</span><h2>Huynh trưởng Xứ đoàn</h2><p>{memberRows.length} hồ sơ HDT · Dữ liệu Firestore</p></div><div className="member-header-actions"><button className="outline-button" disabled={issuingCodes||!codeableMembers.length} onClick={()=>issueLoginCodes(codeableMembers)}>{issuingCodes?'Đang cấp mã…':`Cấp mã cho ${codeableMembers.length} HDT`}</button><button className="primary-button" onClick={()=>setShowAddMembers(true)}>+ Thêm HDT</button></div></div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label><small>Mỗi mã dùng một lần, hết hạn sau 4 giờ.</small></div><div className="table-wrap"><table><thead><tr><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>NGÀY SINH</th><th>TÀI KHOẢN</th><th>VÒNG 1</th><th>VÒNG 2</th><th>MÃ ĐĂNG NHẬP</th></tr></thead><tbody>{memberRows.filter(person=>`${person.name||person.email||''} ${person.sector||''}`.toLowerCase().includes(query.toLowerCase())).map(person=><tr key={person.id}><td><div className="person-cell"><Avatar person={{...person,initials:person.initials||String(person.name||person.email||'?').split(/\s+/).slice(-2).map(x=>x[0]).join('').toUpperCase(),color:person.color||'mint'}} size="small"/><b>{person.name||person.email}</b></div></td><td><span className="sector-chip">{person.sector||'—'}</span></td><td>{person.birthDate?person.birthDate.split('-').reverse().join('/'):'—'}</td><td><span className={`status-chip ${person.active?'elected':'pending'}`}><i/> {person.active?'Hoạt động':'Chưa kích hoạt'}</span></td><td><span className={`status-chip ${ballotStatus[person.id]?.[1]||person.round1Voted?'done':'pending'}`}>{ballotStatus[person.id]?.[1]||person.round1Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><span className={`status-chip ${ballotStatus[person.id]?.[2]||person.round2Voted?'done':'pending'}`}>{ballotStatus[person.id]?.[2]||person.round2Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><button className="outline-button" disabled={!person.rosterRecord||issuingCodes} onClick={()=>issueLoginCode(person)}>{!person.rosterRecord?'Nhập lại danh sách':person.pendingAccount?'Cấp mã':'Cấp lại mã'}</button></td></tr>)}</tbody></table>{!memberRows.length&&<div className="empty-state">Chưa có hồ sơ HDT trong danh sách.</div>}</div></section>}
+    {tab === 'members' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">DANH SÁCH CỬ TRI</span><h2>Huynh trưởng Xứ đoàn</h2><p>{rosterMembers.length} HDT đang hoạt động · {rosterRecords.length-rosterMembers.length} đã ngừng kích hoạt</p></div><div className="member-header-actions"><button className="outline-button" disabled={issuingCodes||!codeableMembers.length} onClick={()=>issueLoginCodes(codeableMembers)}>{issuingCodes?'Đang cấp mã…':`Cấp mã cho ${codeableMembers.length} HDT`}</button><button className="primary-button" onClick={()=>setShowAddMembers(true)}>+ Thêm HDT</button></div></div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label><small>Mỗi mã dùng một lần, hết hạn sau 4 giờ.</small></div><div className="table-wrap"><table><thead><tr><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>NGÀY SINH</th><th>TÀI KHOẢN</th><th>VÒNG 1</th><th>VÒNG 2</th><th>MÃ ĐĂNG NHẬP</th><th>TRẠNG THÁI</th></tr></thead><tbody>{memberRows.filter(person=>`${person.name||person.email||''} ${person.sector||''}`.toLowerCase().includes(query.toLowerCase())).map(person=><tr key={person.id}><td><div className="person-cell"><Avatar person={{...person,initials:person.initials||String(person.name||person.email||'?').split(/\s+/).slice(-2).map(x=>x[0]).join('').toUpperCase(),color:person.color||'mint'}} size="small"/><b>{person.name||person.email}</b></div></td><td><span className="sector-chip">{person.sector||'—'}</span></td><td>{person.birthDate?person.birthDate.split('-').reverse().join('/'):'—'}</td><td><span className={`status-chip ${person.active?'elected':'pending'}`}><i/> {person.active?'Hoạt động':'Đã ngừng'}</span></td><td><span className={`status-chip ${ballotStatus[person.id]?.[1]||person.round1Voted?'done':'pending'}`}>{ballotStatus[person.id]?.[1]||person.round1Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><span className={`status-chip ${ballotStatus[person.id]?.[2]||person.round2Voted?'done':'pending'}`}>{ballotStatus[person.id]?.[2]||person.round2Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><button className="outline-button" disabled={!person.rosterRecord||issuingCodes||deactivatingMemberId===person.id||!person.active} onClick={()=>issueLoginCode(person)}>{!person.rosterRecord?'Không có mã':!person.active?'Đã khóa':person.pendingAccount?'Cấp mã':'Cấp lại mã'}</button></td><td>{person.rosterRecord?<button className={person.active?'deactivate-button':'outline-button'} disabled={deactivatingMemberId===person.id} onClick={()=>setMemberActive(person)}>{deactivatingMemberId===person.id?'Đang lưu…':person.active?'Ngừng kích hoạt':'Kích hoạt lại'}</button>:<span>—</span>}</td></tr>)}</tbody></table>{!memberRows.length&&<div className="empty-state">Chưa có hồ sơ HDT trong danh sách.</div>}</div></section>}
         <footer className="footer"><span>© {new Date().getFullYear()} Đoàn Gioan Baotixita · Giáo xứ Bảo Sơn</span><div><span>Được xây dựng với <b>♥</b> và tinh thần phục vụ</span><i/> <button onClick={()=>notify(`Kết nối Firebase: ${firebaseConfigured?'đã cấu hình':'chưa cấu hình'}`)}>Phiên bản 1.0.0</button></div></footer>
       </div>
     </main>
