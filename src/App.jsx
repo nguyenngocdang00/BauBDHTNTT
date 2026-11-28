@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bell, ChevronDown, ChevronRight, CircleHelp, ClipboardList, Download, Copy, LayoutDashboard, LogOut, Search, ShieldCheck, SlidersHorizontal, Users, Vote, X, Check, Clock3, ArrowUpRight, Menu, Settings, CalendarDays } from 'lucide-react'
 import { firebaseConfigured, auth, db } from './firebase.js'
 import { GoogleAuthProvider, onAuthStateChanged, signInAnonymously, signInWithPopup, signOut } from 'firebase/auth'
-import { addDoc, collection, collectionGroup, deleteField, doc, getDoc, getDocs, onSnapshot, runTransaction, serverTimestamp, setDoc, Timestamp, updateDoc, writeBatch } from 'firebase/firestore'
+import { addDoc, collection, collectionGroup, deleteDoc, deleteField, doc, getDoc, getDocs, onSnapshot, runTransaction, serverTimestamp, setDoc, Timestamp, updateDoc, writeBatch } from 'firebase/firestore'
 
 const roles = [
   { icon: '✳', title: 'Trưởng đoàn', category: 'Ban Thường vụ', color: 'coral' },
@@ -109,6 +109,8 @@ function App() {
   const [electionRecords, setElectionRecords] = useState([])
   const [creatingElection, setCreatingElection] = useState(false)
   const [resettingElection, setResettingElection] = useState(false)
+  const [electionToDeleteId, setElectionToDeleteId] = useState('')
+  const [deletingElection, setDeletingElection] = useState(false)
   const [election, setElection] = useState(null)
   const [electionForm, setElectionForm] = useState({ name: '', term: '', description: '', endsAt: '', round1Seats: '11', round2Seats: '5' })
   const [savingElection, setSavingElection] = useState(false)
@@ -863,6 +865,41 @@ function App() {
     } catch(error){notify(`Chưa đặt lại hoàn toàn dữ liệu: ${error.message}. Hãy kiểm tra Firestore Rules hoặc tải lại trang trước khi thử lại.`)}
     finally{setResettingElection(false)}
   }
+  const deleteEmptyElection = async () => {
+    if (!isAdmin) return notify('Chỉ admin đoàn mới được xóa nhiệm kỳ.')
+    if (!electionToDeleteId) return notify('Chọn nhiệm kỳ cần xóa.')
+    if (electionToDeleteId===electionId) return notify('Không thể xóa kỳ đang được chọn. Hãy chuyển sang kỳ khác trước.')
+    const selectedElection=electionRecords.find(item=>item.id===electionToDeleteId)
+    if (!selectedElection) return notify('Không tìm thấy kỳ bầu cử đã chọn. Hãy tải lại trang.')
+    const label=selectedElection.term||selectedElection.name||selectedElection.id
+    if (!window.confirm(`Xóa hẳn nhiệm kỳ “${label}”? Chỉ được phép nếu kỳ này đã được đặt lại và không còn phiếu, ứng viên, kết quả hoặc vòng phụ. Thao tác không thể hoàn tác.`)) return
+    const phrase=`DELETE ${label}`
+    if (window.prompt(`Để xác nhận, hãy nhập chính xác:\n${phrase}`)!==phrase) return notify('Chưa xóa nhiệm kỳ vì nội dung xác nhận không khớp.')
+    setDeletingElection(true)
+    try {
+      const electionRef=doc(db,'elections',electionToDeleteId)
+      const [electionSnap,ballots,candidateDocs,runoffDocs,round1Tallies,round2Tallies,legacyRounds,activeElectionSnap]=await Promise.all([
+        getDoc(electionRef),
+        getDocs(collection(db,'elections',electionToDeleteId,'ballots')),
+        getDocs(collection(db,'elections',electionToDeleteId,'candidates')),
+        getDocs(collection(db,'elections',electionToDeleteId,'runoffs')),
+        getDocs(collection(db,'elections',electionToDeleteId,'tallies','round1','candidates')),
+        getDocs(collection(db,'elections',electionToDeleteId,'tallies','round2','candidates')),
+        getDocs(collectionGroup(db,'rounds')),
+        getDoc(doc(db,'appSettings','activeElection')),
+      ])
+      if (!electionSnap.exists()) return notify('Nhiệm kỳ đã bị xóa hoặc không còn tồn tại.')
+      if (activeElectionSnap.exists()&&activeElectionSnap.data().electionId===electionToDeleteId) return notify('Đây là kỳ đang hoạt động. Hãy chuyển sang kỳ khác trước khi xóa.')
+      const data=electionSnap.data()
+      const legacyForElection=legacyRounds.docs.filter(item=>item.ref.parent.parent?.id===electionToDeleteId)
+      const hasElectionHistory=data.status==='open'||data.activeRound!==1||(data.round1VotedCount||0)>0||(data.round2VotedCount||0)>0||data.round1Finalized===true||data.round2Finalized===true||[...(data.round1CandidateIds||[]),...(data.round2CandidateIds||[]),...(data.round1WinnerIds||[]),...(data.round2WinnerIds||[])].length>0||Object.keys(data.roles||{}).length>0
+      if (hasElectionHistory||!ballots.empty||!candidateDocs.empty||!runoffDocs.empty||!round1Tallies.empty||!round2Tallies.empty||legacyForElection.length) return notify('Chưa xóa được: nhiệm kỳ vẫn còn dữ liệu. Hãy dùng “Đặt lại dữ liệu kỳ này”, sau đó thử lại.')
+      await deleteDoc(electionRef)
+      setElectionToDeleteId('')
+      notify(`Đã xóa nhiệm kỳ “${label}”. Danh sách HDT và các kỳ khác không bị ảnh hưởng.`)
+    } catch(error){notify(`Không xóa được nhiệm kỳ: ${error.message}`)}
+    finally{setDeletingElection(false)}
+  }
   const openCandidatePicker = () => {
     if (!isAdmin) return notify('Chỉ admin đoàn mới được chọn ứng viên.')
     if (election?.status === 'open' || electionHistoryLocked) return notify('Danh sách ứng viên đã khóa vì kỳ này đã bắt đầu.')
@@ -1205,6 +1242,7 @@ function App() {
             form={electionForm} setForm={setElectionForm} election={election}
             electionRecords={electionRecords} electionId={electionId} onSwitchElection={switchElection} onCreateElection={createElection} creatingElection={creatingElection}
             onResetElection={resetElectionData} resettingElection={resettingElection} hasActiveRunoff={Boolean(activeRunoff)}
+            electionToDeleteId={electionToDeleteId} setElectionToDeleteId={setElectionToDeleteId} onDeleteEmptyElection={deleteEmptyElection} deletingElection={deletingElection}
             historyLocked={electionHistoryLocked}
             rosterMembers={rosterMembers} candidates={candidates} runoffs={runoffs} round2Tallies={talliesByRound[2]||{}}
             round2Winners={round2Winners} setRound2Winners={setRound2Winners} onFinalizeRound2={finalizeRound2} finalizingRound2={finalizingRound2}
@@ -1250,8 +1288,9 @@ function App() {
   </div>
 }
 
-function ElectionAdminPanel({form,setForm,election,electionRecords,electionId,onSwitchElection,onCreateElection,creatingElection,onResetElection,resettingElection,hasActiveRunoff,historyLocked,rosterMembers,candidates,runoffs,round1Tallies,round2Tallies,round2Winners,setRound2Winners,onFinalizeRound2,finalizingRound2,finalizingRound1,onFinalizeRound1,saving,syncing,publishingResults,onSave,onOpenCandidatePicker,onToggleCandidate,onToggleElected,onOpenRound1,onOpenRound2,onCloseRound,onPublishResults,round1Seats,round2Seats}) {
+function ElectionAdminPanel({form,setForm,election,electionRecords,electionId,onSwitchElection,onCreateElection,creatingElection,onResetElection,resettingElection,hasActiveRunoff,electionToDeleteId,setElectionToDeleteId,onDeleteEmptyElection,deletingElection,historyLocked,rosterMembers,candidates,runoffs,round1Tallies,round2Tallies,round2Winners,setRound2Winners,onFinalizeRound2,finalizingRound2,finalizingRound1,onFinalizeRound1,saving,syncing,publishingResults,onSave,onOpenCandidatePicker,onToggleCandidate,onToggleElected,onOpenRound1,onOpenRound2,onCloseRound,onPublishResults,round1Seats,round2Seats}) {
   const activeCandidates = candidates.filter(person => person.active !== false)
+  const deletableElections=electionRecords.filter(item=>item.id!==electionId)
   const rosterById = new Map(rosterMembers.map(person=>[person.id,person]))
   const sortedCandidates = candidates.filter(person=>person.active!==false&&rosterById.has(person.id)).map(person=>{
     const rosterPerson=rosterById.get(person.id)
@@ -1263,6 +1302,7 @@ function ElectionAdminPanel({form,setForm,election,electionRecords,electionId,on
     <section className="panel election-config-panel">
       <div className="results-header"><div><span className="banner-kicker">THIẾT LẬP NHIỆM KỲ</span><h2>Thông tin kỳ bầu cử</h2><p>Nhập thông tin sẽ hiển thị cho toàn Xứ đoàn.</p></div><span className={`status-chip ${isOpen?'elected':'pending'}`}>{isOpen?`ĐANG MỞ · VÒNG ${election.activeRound}`:'ĐANG ĐÓNG'}</span></div>
       <div className="election-picker-row"><label>Chọn kỳ đang quản lý<select value={electionId} disabled={isOpen||creatingElection} onChange={event=>onSwitchElection(event.target.value)}>{electionRecords.map(item=><option key={item.id} value={item.id}>{item.term?`${item.term} · `:''}${item.name||'Kỳ chưa đặt tên'}{item.id==='current'?' · dữ liệu cũ':''}</option>)}</select></label><button className="outline-button" onClick={onCreateElection} disabled={isOpen||creatingElection}>{creatingElection?'Đang tạo kỳ…':'＋ Tạo kỳ bầu cử mới'}</button></div>
+      <div className="election-delete-row"><div><b>Xóa nhiệm kỳ đã làm sạch</b><small>Chỉ xóa được kỳ không còn phiếu, ứng viên, kết quả hay vòng phụ. Kỳ đang hoạt động không thể xóa.</small></div><label><span>Chọn nhiệm kỳ</span><select value={deletableElections.some(item=>item.id===electionToDeleteId)?electionToDeleteId:''} onChange={event=>setElectionToDeleteId(event.target.value)} disabled={!deletableElections.length||deletingElection}><option value="">Chọn kỳ đã đặt lại…</option>{deletableElections.map(item=><option key={item.id} value={item.id}>{item.term?`${item.term} · `:''}{item.name||'Kỳ chưa đặt tên'}{item.id==='current'?' · dữ liệu cũ':''}</option>)}</select></label><button className="danger-button" onClick={onDeleteEmptyElection} disabled={!electionToDeleteId||deletingElection}>{deletingElection?'Đang xóa…':'Xóa nhiệm kỳ'}</button></div>
       <div className="election-form-grid">
         <label>Tên kỳ bầu cử<input value={form.name} disabled={isOpen||historyLocked} onChange={event=>setForm({...form,name:event.target.value})} placeholder="Bầu chọn Ban điều hành Xứ đoàn"/></label>
         <label>Nhiệm kỳ<input value={form.term} disabled={isOpen||historyLocked} onChange={event=>setForm({...form,term:event.target.value})} placeholder="Ví dụ: 2026 – 2029"/></label>
