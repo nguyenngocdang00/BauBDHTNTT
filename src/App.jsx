@@ -171,6 +171,13 @@ function App() {
   const votedCount = election?.[`round${round}VotedCount`] || 0
   const pct = voterCount ? Math.round((votedCount / voterCount) * 100) : 0
   const notify = (message) => { setNotice(message); window.setTimeout(() => setNotice(''), 3000) }
+  const logout = async () => {
+    setSelected([])
+    setQuery('')
+    setRunoffVoted(false)
+    setTab('dashboard')
+    try { await signOut(auth) } catch (error) { notify(`Không đăng xuất được: ${error.message}`) }
+  }
   const authErrorText = error => ({
     'auth/operation-not-allowed': 'Phương thức Google chưa được bật. Vào Firebase Console → Authentication → Sign-in method để bật Google.',
     'auth/unauthorized-domain': 'Tên miền trang web chưa được cho phép. Thêm GitHub Pages domain tại Authentication → Settings → Authorized domains.',
@@ -419,6 +426,12 @@ function App() {
     })
   }, [])
   useEffect(() => {
+    setSelected([])
+    setQuery('')
+    setRunoffVoted(false)
+    if (tab === 'vote') setTab('dashboard')
+  }, [authUser?.uid, profile?.voterId])
+  useEffect(() => {
     if (!db || !authUser || !profile?.active) return
     const stopElections = onSnapshot(collection(db, 'elections'), snap => {
       setElectionRecords(snap.docs.map(item=>({id:item.id,...item.data()})).sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0)))
@@ -436,6 +449,8 @@ function App() {
     setTalliesByRound({})
     setVotedRounds({})
     setBallotStatus({})
+    setSelected([])
+    setQuery('')
     liveTallies.current = {}
     setRound(1)
   }, [electionId])
@@ -1041,7 +1056,7 @@ function App() {
   if (!firebaseConfigured || !auth || !db) return <div className="setup-screen"><section className="panel setup-card"><div className="brand-mark">✳</div><h1>Cần cấu hình Firebase</h1><p>Ứng dụng hiện chưa kết nối dự án Firebase nên không hiển thị dữ liệu mẫu hoặc nhận phiếu bầu.</p><p>Điền cấu hình ứng dụng Web trong <code>.env.local</code>, sau đó bật Authentication và Firestore.</p><small>Xem hướng dẫn thiết lập trong README.md</small></section></div>
   if (!authReady) return <div className="setup-screen"><section className="panel setup-card"><h1>Đang kiểm tra đăng nhập…</h1></section></div>
   if (!profile?.active && (!authUser || authUser.isAnonymous)) return <div className="setup-screen"><section className="panel setup-card"><div className="brand-mark">✳</div><h1>Đăng nhập cổng bầu chọn</h1><p>Nhập mã đăng nhập do admin đoàn cấp. Mỗi mã dùng một lần và có thể sử dụng trong 4 giờ kể từ lúc cấp.</p><form className="login-method" onSubmit={loginWithCode}><b>Mã đăng nhập Huynh trưởng</b><input className="login-input access-code-input" aria-label="Mã đăng nhập" autoComplete="one-time-code" maxLength={14} value={loginCode} onChange={event=>setLoginCode(event.target.value.toUpperCase())} placeholder="ABCD-EFGH-JKLM"/><button className="primary-button" disabled={loggingInWithCode}>{loggingInWithCode?'Đang xác thực…':'Đăng nhập bằng mã'}</button></form><div className="login-divider">Admin đoàn</div><button className="outline-button login-google" onClick={signInGoogle}>Đăng nhập bằng Google</button><small className="login-footnote">Không cần SMS hoặc tài khoản Google để bỏ phiếu. Sau khi mã được dùng, thiết bị này sẽ giữ phiên đăng nhập.</small>{notice&&<small className="setup-error">{notice}</small>}</section></div>
-  if (!profile?.active) return <div className="setup-screen"><section className="panel setup-card"><div className="brand-mark">✳</div><h1>Tài khoản chưa được duyệt</h1><p>{authUser.email || 'Tài khoản Google này'} chưa có quyền quản trị. HDT hãy đăng xuất rồi nhập mã do admin cấp.</p><button className="outline-button" onClick={() => signOut(auth)}><LogOut size={16}/> Đăng xuất</button></section></div>
+  if (!profile?.active) return <div className="setup-screen"><section className="panel setup-card"><div className="brand-mark">✳</div><h1>Tài khoản chưa được duyệt</h1><p>{authUser.email || 'Tài khoản Google này'} chưa có quyền quản trị. HDT hãy đăng xuất rồi nhập mã do admin cấp.</p><button className="outline-button" onClick={logout}><LogOut size={16}/> Đăng xuất</button></section></div>
   return <div className="app-shell">
     <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
       <div className="brand"><div className="brand-mark"><span>✳</span></div><div><b>Đoàn Gioan Baotixita</b><small>GIÁO XỨ BẢO SƠN</small></div><button className="mobile-close" onClick={() => setMenuOpen(false)}><X size={17}/></button></div>
@@ -1052,12 +1067,12 @@ function App() {
     <div className="sidebar-bottom">
         <button className="nav-item" onClick={() => notify('Hướng dẫn bầu chọn sẽ sớm được cập nhật.')}><CircleHelp size={18}/><span>Trợ giúp</span></button>
         <div className="admin-toggle"><div className="admin-icon"><ShieldCheck size={17}/></div><div><b>{isAdmin ? 'Quản trị viên' : 'Tài khoản HDT'}</b><small>{profile.sector || 'Đã xác thực Firebase'}</small></div></div>
-        <button className="profile" onClick={() => signOut(auth).catch(error => notify(error.message))}><Avatar person={{ initials: (profile.name || authUser.displayName || authUser.email || 'H').split(/\s+/).slice(-2).map(x=>x[0]).join('').toUpperCase(), color: 'olive' }}/><span><b>{profile.name || authUser.displayName || authUser.email}</b><small>{profile.title || profile.sector || 'Huynh trưởng'}</small></span><LogOut size={15}/></button>
+        <button className="profile" onClick={logout}><Avatar person={{ initials: (profile.name || authUser.displayName || authUser.email || 'H').split(/\s+/).slice(-2).map(x=>x[0]).join('').toUpperCase(), color: 'olive' }}/><span><b>{profile.name || authUser.displayName || authUser.email}</b><small>{profile.title || profile.sector || 'Huynh trưởng'}</small></span><LogOut size={15}/></button>
       </div>
     </aside>
     {menuOpen && <button className="scrim" aria-label="Đóng menu" onClick={() => setMenuOpen(false)}/>}
     <main className="main-area">
-      <header className="topbar"><div className="crumb"><button className="hamburger" onClick={() => setMenuOpen(true)}><Menu size={20}/></button><span>Cổng thông tin</span><ChevronRight size={15}/><b>{nav.find(item => item.key === tab)?.label || 'Tổng quan'}</b></div><div className="top-actions"><span className="cycle-pill"><i/> {activeRunoff ? 'ĐANG BỎ PHIẾU PHỤ' : election?.status === 'open' ? 'ĐANG DIỄN RA' : 'CHƯA MỞ'}</span><button className="icon-button" onClick={() => notify('Bạn không có thông báo mới.')}><Bell size={18}/></button><div className="top-divider"/><button className="top-profile" onClick={() => signOut(auth)}><Avatar person={{ initials: (profile.name || authUser.displayName || 'H').split(/\s+/).slice(-2).map(x=>x[0]).join('').toUpperCase(), color: 'olive' }} size="small"/><ChevronDown size={14}/></button></div></header>
+      <header className="topbar"><div className="crumb"><button className="hamburger" onClick={() => setMenuOpen(true)}><Menu size={20}/></button><span>Cổng thông tin</span><ChevronRight size={15}/><b>{nav.find(item => item.key === tab)?.label || 'Tổng quan'}</b></div><div className="top-actions"><span className="cycle-pill"><i/> {activeRunoff ? 'ĐANG BỎ PHIẾU PHỤ' : election?.status === 'open' ? 'ĐANG DIỄN RA' : 'CHƯA MỞ'}</span><button className="icon-button" onClick={() => notify('Bạn không có thông báo mới.')}><Bell size={18}/></button><div className="top-divider"/><button className="top-profile" onClick={logout}><Avatar person={{ initials: (profile.name || authUser.displayName || 'H').split(/\s+/).slice(-2).map(x=>x[0]).join('').toUpperCase(), color: 'olive' }} size="small"/><ChevronDown size={14}/></button></div></header>
       <div className="content">
         <div className="welcome-line"><div><div className="eyebrow"><span>✳</span> ĐOÀN GIOAN BAOTIXITA · GIÁO XỨ BẢO SƠN</div><h1>{tab === 'dashboard' ? `Xin chào, ${profile.name || authUser.displayName || 'Huynh trưởng'}` : tab === 'vote' ? 'Phiếu bầu của bạn' : tab === 'results' ? 'Kết quả bầu chọn' : tab === 'roles' ? 'Phân công chức vụ' : tab === 'election' ? 'Cấu hình kỳ bầu cử' : 'Danh sách Huynh trưởng'} <span className="wave">✦</span></h1><p>Dữ liệu bầu cử được cập nhật trực tiếp từ Firebase.</p></div><button className="help-button" onClick={() => notify('Liên hệ admin đoàn để được hỗ trợ.')}><CircleHelp size={16}/> Hướng dẫn bầu chọn</button></div>
         <div className="election-banner"><div className="banner-pattern"/><div className="banner-icon"><Vote size={21}/></div><div className="banner-copy"><span className="banner-kicker">KỲ BẦU CỬ · {election?.term || 'Nhiệm kỳ chưa thiết lập'}</span><b>{election?.name || 'Bầu chọn Ban điều hành Xứ đoàn'}</b><span>{election?.description || 'Theo dõi kỳ bầu cử được cấu hình bởi admin đoàn.'}</span></div><div className="banner-separator"/><div className="banner-deadline"><span>TRẠNG THÁI</span><b>{activeRunoff ? 'Vòng phụ' : election?.status === 'open' ? `Vòng ${election.activeRound}` : 'Chưa mở'}</b><span>{(activeRunoff?.endsAt || election?.endsAt)?.toDate ? `Kết thúc ${(activeRunoff?.endsAt || election.endsAt).toDate().toLocaleString('vi-VN')}` : 'Chưa đặt thời hạn'}</span></div><button className="banner-cta" onClick={() => { setTab('vote'); setSelected([]) }} disabled={activeRunoff ? runoffVoted : election?.status !== 'open' || votedRounds[election?.activeRound]}> {activeRunoff ? runoffVoted ? 'Đã bỏ phiếu phụ' : 'Bỏ phiếu phụ' : election?.status === 'open' ? votedRounds[election.activeRound] ? 'Đã bỏ phiếu' : 'Bắt đầu bầu chọn' : 'Chờ kỳ bầu cử'} <ArrowUpRight size={16}/></button></div>
