@@ -1102,7 +1102,7 @@ function App() {
             form={electionForm} setForm={setElectionForm} election={election}
             electionRecords={electionRecords} electionId={electionId} onSwitchElection={switchElection} onCreateElection={createElection} creatingElection={creatingElection}
             historyLocked={electionHistoryLocked}
-            rosterMembers={rosterMembers} candidates={candidates} round2Tallies={talliesByRound[2]||{}}
+            rosterMembers={rosterMembers} candidates={candidates} runoffs={runoffs} round2Tallies={talliesByRound[2]||{}}
             round2Winners={round2Winners} setRound2Winners={setRound2Winners} onFinalizeRound2={finalizeRound2} finalizingRound2={finalizingRound2}
             saving={savingElection} syncing={syncingCandidates}
             onSave={saveElectionConfiguration} onOpenCandidatePicker={openCandidatePicker} onSaveCandidateSelection={saveCandidateSelection}
@@ -1146,7 +1146,7 @@ function App() {
   </div>
 }
 
-function ElectionAdminPanel({form,setForm,election,electionRecords,electionId,onSwitchElection,onCreateElection,creatingElection,historyLocked,rosterMembers,candidates,round1Tallies,round2Tallies,round2Winners,setRound2Winners,onFinalizeRound2,finalizingRound2,finalizingRound1,onFinalizeRound1,saving,syncing,publishingResults,onSave,onOpenCandidatePicker,onToggleCandidate,onToggleElected,onOpenRound1,onOpenRound2,onCloseRound,onPublishResults,round1Seats,round2Seats}) {
+function ElectionAdminPanel({form,setForm,election,electionRecords,electionId,onSwitchElection,onCreateElection,creatingElection,historyLocked,rosterMembers,candidates,runoffs,round1Tallies,round2Tallies,round2Winners,setRound2Winners,onFinalizeRound2,finalizingRound2,finalizingRound1,onFinalizeRound1,saving,syncing,publishingResults,onSave,onOpenCandidatePicker,onToggleCandidate,onToggleElected,onOpenRound1,onOpenRound2,onCloseRound,onPublishResults,round1Seats,round2Seats}) {
   const activeCandidates = candidates.filter(person => person.active !== false)
   const rosterById = new Map(rosterMembers.map(person=>[person.id,person]))
   const sortedCandidates = candidates.filter(person=>person.active!==false&&rosterById.has(person.id)).map(person=>{
