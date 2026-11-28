@@ -117,7 +117,7 @@ function App() {
   const [syncingCandidates, setSyncingCandidates] = useState(false)
   const [publishingResults, setPublishingResults] = useState(false)
   const [runoffs, setRunoffs] = useState([])
-  const [runoffTallies, setRunoffTallies] = useState({})
+  const [runoffTalliesById, setRunoffTalliesById] = useState({})
   const [runoffVoted, setRunoffVoted] = useState(false)
   const [runoffCandidateIds, setRunoffCandidateIds] = useState([])
   const [runoffSeats, setRunoffSeats] = useState('1')
@@ -140,6 +140,9 @@ function App() {
   const displayedRunoff = activeRunoff || [...runoffs].sort((a,b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))[0] || null
   const adminRunoffRound = election?.activeRound === 2 ? 2 : 1
   const adminDisplayedRunoff = activeRunoff?.sourceRound === adminRunoffRound ? activeRunoff : [...runoffs].filter(item => (item.sourceRound || 1) === adminRunoffRound).sort((a,b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))[0] || null
+  const resultRunoff = [...runoffs].filter(item => (item.sourceRound || 1) === round).sort((a,b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))[0] || null
+  const adminRunoffTallies = runoffTalliesById[adminDisplayedRunoff?.id] || {}
+  const resultRunoffTallies = runoffTalliesById[resultRunoff?.id] || {}
   const memberRows = useMemo(() => {
     const profilesByVoterId = new Map(members.filter(person => person.voterId).map(person => [person.voterId, person]))
     const rosterIds = new Set(rosterMembers.map(person => person.id))
@@ -525,14 +528,16 @@ function App() {
     if (!db || !activeRunoff?.id || !profile?.voterId) return
     return onSnapshot(doc(db, 'elections', electionId, 'runoffs', activeRunoff.id, 'ballots', profile.voterId), snap => setRunoffVoted(snap.exists()), error => notify(`Không kiểm tra được phiếu phụ: ${error.message}`))
   }, [electionId, activeRunoff?.id, profile?.voterId])
+  const runoffIdsKey = runoffs.map(item=>item.id).sort().join('|')
   useEffect(() => {
-    if (!db || !displayedRunoff?.id) { setRunoffTallies({}); return }
-    return onSnapshot(collection(db, 'elections', electionId, 'runoffs', displayedRunoff.id, 'tallies'), snap => {
+    if (!db || !runoffs.length) { setRunoffTalliesById({}); return }
+    const unsubs = runoffs.map(runoff=>onSnapshot(collection(db,'elections',electionId,'runoffs',runoff.id,'tallies'),snap=>{
       const totals = {}
-      snap.docs.forEach(item => { totals[item.id] = item.data().votes || 0 })
-      setRunoffTallies(totals)
-    }, error => notify(`Không đọc được kết quả vòng phụ: ${error.message}`))
-  }, [electionId, displayedRunoff?.id])
+      snap.docs.forEach(item=>{totals[item.id]=item.data().votes||0})
+      setRunoffTalliesById(current=>({...current,[runoff.id]:totals}))
+    },error=>notify(`Không đọc được kết quả vòng phụ ${runoff.sourceRound||1}: ${error.message}`)))
+    return ()=>unsubs.forEach(unsubscribe=>unsubscribe())
+  }, [db,electionId,runoffIdsKey])
   useEffect(() => {
     if (!db || !isAdmin || !displayedRunoff?.id || displayedRunoff.finalized) return
     return onSnapshot(collection(db, 'elections', electionId, 'runoffs', displayedRunoff.id, 'ballots'), snap => {
@@ -985,10 +990,12 @@ function App() {
       ['Hạng', 'Họ và tên', 'Ngành', 'Số phiếu', 'Tỷ lệ trên tổng HDT', 'Kết quả'],
       ...ranked.map((person, index) => [index + 1, person.name, person.sector, person.votes, `${Math.round(person.votes / (voterCount || 1) * 100)}%`, resultStatus(person, index)]),
     ]
-    if (round === 1 && displayedRunoff?.status === 'closed') {
-      const runoffRows = (displayedRunoff.candidateIds || []).map(id => candidates.find(person => person.id === id)).filter(Boolean).sort((a,b)=>(runoffTallies[b.id]||0)-(runoffTallies[a.id]||0)||String(a.name||'').localeCompare(String(b.name||''),'vi'))
-      rows.push([], ['KẾT QUẢ VÒNG PHỤ RIÊNG'], ['Số suất cần chọn', displayedRunoff.seats], ['HDT đã bỏ phiếu phụ', displayedRunoff.votedCount || 0], ['Hạng', 'Họ và tên', 'Ngành', 'Phiếu vòng 1', 'Phiếu phụ', 'Kết quả phụ'])
-      runoffRows.forEach((person,index)=>rows.push([index+1,person.name,person.sector,talliesByRound[1]?.[person.id]||0,runoffTallies[person.id]||0,displayedRunoff.winnerIds?.includes(person.id)?'Trúng vòng phụ':displayedRunoff.finalized?'Không trúng':'Chưa chốt']))
+    if (resultRunoff?.status === 'closed') {
+      const sourceRound = resultRunoff.sourceRound || 1
+      const sourceRunoffTallies = runoffTalliesById[resultRunoff.id] || {}
+      const runoffRows = (resultRunoff.candidateIds || []).map(id => candidates.find(person => person.id === id)).filter(Boolean).sort((a,b)=>(sourceRunoffTallies[b.id]||0)-(sourceRunoffTallies[a.id]||0)||String(a.name||'').localeCompare(String(b.name||''),'vi'))
+      rows.push([], [`KẾT QUẢ VÒNG PHỤ ${sourceRound}`], ['Số suất cần chọn', resultRunoff.seats], ['HDT đã bỏ phiếu phụ', resultRunoff.votedCount || 0], ['Hạng', 'Họ và tên', 'Ngành', `Phiếu vòng ${sourceRound}`, 'Phiếu phụ', 'Kết quả phụ'])
+      runoffRows.forEach((person,index)=>rows.push([index+1,person.name,person.sector,talliesByRound[sourceRound]?.[person.id]||0,sourceRunoffTallies[person.id]||0,resultRunoff.winnerIds?.includes(person.id)?'Trúng vòng phụ':resultRunoff.finalized?'Không trúng':'Chưa chốt']))
     }
     const csv = '\uFEFF' + rows.map(row => row.map(csvCell).join(',')).join('\r\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
@@ -1133,7 +1140,7 @@ function App() {
           />
           <RunoffAdminPanel
             candidates={candidates} tallies={talliesByRound[1] || {}}
-            runoffTallies={runoffTallies} activeRunoff={activeRunoff} displayedRunoff={adminDisplayedRunoff}
+            runoffTallies={adminRunoffTallies} activeRunoff={activeRunoff} displayedRunoff={adminDisplayedRunoff}
             selectedIds={runoffCandidateIds} setSelectedIds={setRunoffCandidateIds}
             seats={runoffSeats} setSeats={setRunoffSeats} endsAt={runoffEndsAt} setEndsAt={setRunoffEndsAt}
             winners={runoffWinners} setWinners={setRunoffWinners}
@@ -1151,7 +1158,7 @@ function App() {
         {tab === 'vote' && <div className="vote-layout"><section className="panel ballot-panel"><div className="ballot-top"><div><span className="banner-kicker">{activeRunoff ? `PHIẾU PHỤ · VÒNG ${activeRunoff.sourceRound}` : `PHIẾU BẦU CỬ · VÒNG ${round}`}</span><h2>{activeRunoff ? `Chọn ${activeRunoff.seats} người trong nhóm hòa phiếu` : round === 1 ? `Chọn ${round1Seats} thành viên Ban điều hành` : `Chọn ${round2Seats} thành viên Ban Thường vụ`}</h2><p>{activeRunoff ? 'Đây là phiếu phụ riêng. Phiếu vòng 1 đã gửi không bị thay đổi.' : round === 1 ? `Chọn ${round1Seats} Huynh trưởng mà bạn tín nhiệm. Bạn có thể tự bầu cho mình.` : `Chọn ${round2Seats} người trong danh sách ${round1Seats} thành viên đã trúng cử.`}</p></div>{!activeRunoff && <div className="round-switch"><button className={round===1?'selected':''} onClick={() => {setRound(1);setSelected([])}}>Vòng 1</button><button className={round===2?'selected':''} onClick={() => {setRound(2);setSelected([])}}>Vòng 2</button></div>}</div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label><button className="filter-button"><SlidersHorizontal size={15}/> Tất cả ngành <ChevronDown size={14}/></button><span className="selection-count">Đã chọn <b>{selected.length}</b> / {maxSelection}</span></div><div className="candidate-grid">{ballotCandidates.filter(person=>`${person.name} ${person.sector}`.toLowerCase().includes(query.toLowerCase())).map(person=><button key={person.id} className={`candidate-card ${selected.includes(person.id)?'chosen':''}`} onClick={()=>selectCandidate(person.id)}><Avatar person={person}/><span className="candidate-name"><b>{person.name}</b><small>{person.sector}</small></span><span className={`checkbox ${selected.includes(person.id)?'checked':''}`}>{selected.includes(person.id)&&<Check size={13}/>}</span></button>)}</div><div className="ballot-footer"><span><ShieldCheck size={16}/> Phiếu bầu của bạn được bảo mật</span><button className="primary-button" onClick={submitBallot}>Xác nhận {activeRunoff ? 'phiếu phụ' : 'phiếu bầu'} <ChevronRight size={16}/></button></div></section><aside className="panel ballot-aside"><div className="aside-icon"><ClipboardList size={20}/></div><h3>Hướng dẫn bỏ phiếu</h3><ol><li><span>1</span><p>Chọn đúng <b>{maxSelection} Huynh trưởng</b> mà bạn tín nhiệm.</p></li><li><span>2</span><p>Bạn có thể <b>tự chọn chính mình</b> trong danh sách.</p></li><li><span>3</span><p>Kiểm tra lựa chọn trước khi nhấn xác nhận.</p></li><li><span>4</span><p>Sau khi gửi, phiếu bầu <b>không thể chỉnh sửa</b>.</p></li></ol><div className="aside-note"><ShieldCheck size={15}/><span>{activeRunoff ? 'Mỗi HDT chỉ được gửi một phiếu cho đợt phụ này.' : 'Mỗi Huynh trưởng chỉ được bỏ phiếu một lần trong mỗi vòng.'}</span></div><div className="aside-deadline"><Clock3 size={16}/><span>Hạn bỏ phiếu<b>{(activeRunoff?.endsAt || election?.endsAt)?.toDate ? (activeRunoff?.endsAt || election.endsAt).toDate().toLocaleString('vi-VN', { timeZone: 'Asia/Bangkok' }) : 'Chưa thiết lập'}</b></span></div></aside></div>}
         {tab === 'results' && <>
           <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">KỲ BẦU CỬ · {election?.term || 'Nhiệm kỳ chưa thiết lập'}</span><h2>Kết quả vòng {round}</h2><p>Công khai đầy đủ số phiếu của từng ứng viên.</p></div><button className="outline-button" onClick={downloadElectionMinutes}><Download size={16}/> Tải biên bản CSV</button></div><div className="result-tabs"><button className={round===1?'selected':''} onClick={()=>setRound(1)}>Vòng 1 · Bầu {round1Seats} thành viên</button><button className={round===2?'selected':''} onClick={()=>setRound(2)}>Vòng 2 · Bầu {round2Seats}</button></div><div className="table-wrap"><table><thead><tr><th>HẠNG</th><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>SỐ PHIẾU</th><th>TỶ LỆ PHIẾU</th><th>KẾT QUẢ</th></tr></thead><tbody>{ranked.map((person,index)=><tr key={person.id}><td><span className={`rank ${index<maxSelection?'first':''}`}>{String(index+1).padStart(2,'0')}</span></td><td><div className="person-cell"><Avatar person={person} size="small"/><b>{person.name}</b></div></td><td><span className="sector-chip">{person.sector.replace('Ngành ','')}</span></td><td><b>{person.votes}</b> phiếu</td><td><div className="result-vote"><ProgressBar value={Math.round(person.votes/(ranked[0]?.votes || 1)*100)} color={index<maxSelection?'green':'gray'}/><span>{Math.round(person.votes/(voterCount || 1)*100)}%</span></div></td><td><span className={`status-chip ${resultStatus(person,index)==="Trúng cử"||resultStatus(person,index)==="Đang dẫn đầu"?"elected":"pending"}`}>{resultStatus(person,index)}</span></td></tr>)}</tbody></table></div><div className="aside-note">Admin chốt danh sách trúng cử trong mục “Kỳ bầu cử” sau khi xử lý mọi trường hợp hòa phiếu.</div></section>
-          {displayedRunoff?.status==='closed'&&<RunoffPublicResults runoff={displayedRunoff} candidates={candidates} originalTallies={talliesByRound[displayedRunoff.sourceRound||1]||{}} runoffTallies={runoffTallies}/>}
+          {resultRunoff?.status==='closed'&&<RunoffPublicResults runoff={resultRunoff} candidates={candidates} originalTallies={talliesByRound[resultRunoff.sourceRound||1]||{}} runoffTallies={resultRunoffTallies}/>}
         </>}
         {tab === 'roles' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">CƠ CẤU BAN ĐIỀU HÀNH</span><h2>Phân công chức vụ nhiệm kỳ</h2><p>Chức vụ được phân công theo cơ cấu hiện tại; danh sách thành viên lấy theo số ghế đã cấu hình cho từng vòng.</p></div><button className="primary-button" onClick={saveRoleAssignments}>Lưu phân công <Check size={15}/></button></div><div className="roles-grid">{roles.map((role,index)=>{const pool=index<5?ranked.filter(p=>p.elected).slice(0,round2Seats):ranked.filter(p=>p.elected).slice(round2Seats);return <div className="role-card" key={role.title}><div className={`role-symbol ${role.color}`}>{role.icon}</div><div className="role-detail"><span>{role.category}</span><b>{role.title}</b><select value={roleAssignments[role.title]||''} onChange={e=>setRoleAssignments({...roleAssignments,[role.title]:e.target.value})}><option value="">Chọn Huynh trưởng</option>{pool.map(person=><option value={person.id} key={person.id}>{person.name}</option>)}</select></div></div>})}</div><div className="aside-note"><ShieldCheck size={15}/> Phân công mẫu minh họa. Cần lưu xác nhận của Ban Thường vụ trước khi công bố.</div></section>}
         {tab === 'members' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">DANH SÁCH CỬ TRI</span><h2>Huynh trưởng Xứ đoàn</h2><p>{memberRows.length} hồ sơ HDT · Dữ liệu Firestore</p></div><div className="member-header-actions"><button className="outline-button" disabled={issuingCodes||!codeableMembers.length} onClick={()=>issueLoginCodes(codeableMembers)}>{issuingCodes?'Đang cấp mã…':`Cấp mã cho ${codeableMembers.length} HDT`}</button><button className="primary-button" onClick={()=>setShowAddMembers(true)}>+ Thêm HDT</button></div></div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label><small>Mỗi mã dùng một lần, hết hạn sau 4 giờ.</small></div><div className="table-wrap"><table><thead><tr><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>NGÀY SINH</th><th>TÀI KHOẢN</th><th>VÒNG 1</th><th>VÒNG 2</th><th>MÃ ĐĂNG NHẬP</th></tr></thead><tbody>{memberRows.filter(person=>`${person.name||person.email||''} ${person.sector||''}`.toLowerCase().includes(query.toLowerCase())).map(person=><tr key={person.id}><td><div className="person-cell"><Avatar person={{...person,initials:person.initials||String(person.name||person.email||'?').split(/\s+/).slice(-2).map(x=>x[0]).join('').toUpperCase(),color:person.color||'mint'}} size="small"/><b>{person.name||person.email}</b></div></td><td><span className="sector-chip">{person.sector||'—'}</span></td><td>{person.birthDate?person.birthDate.split('-').reverse().join('/'):'—'}</td><td><span className={`status-chip ${person.active?'elected':'pending'}`}><i/> {person.active?'Hoạt động':'Chưa kích hoạt'}</span></td><td><span className={`status-chip ${ballotStatus[person.id]?.[1]||person.round1Voted?'done':'pending'}`}>{ballotStatus[person.id]?.[1]||person.round1Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><span className={`status-chip ${ballotStatus[person.id]?.[2]||person.round2Voted?'done':'pending'}`}>{ballotStatus[person.id]?.[2]||person.round2Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><button className="outline-button" disabled={!person.rosterRecord||issuingCodes} onClick={()=>issueLoginCode(person)}>{!person.rosterRecord?'Nhập lại danh sách':person.pendingAccount?'Cấp mã':'Cấp lại mã'}</button></td></tr>)}</tbody></table>{!memberRows.length&&<div className="empty-state">Chưa có hồ sơ HDT trong danh sách.</div>}</div></section>}
