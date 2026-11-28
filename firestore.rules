@@ -37,6 +37,12 @@ service cloud.firestore {
     function validSector(sector) {
       return sector in ['Ngành Chiên', 'Ngành Ấu', 'Ngành Thiếu', 'Ngành Nghĩa', 'Ngành Hiệp', 'Ban Điều hành', 'Khác'];
     }
+    function voterIsInElection(electionId, voterId) {
+      let election = get(/databases/$(database)/documents/elections/$(electionId)).data;
+      let voter = /databases/$(database)/documents/elections/$(electionId)/voters/$(voterId);
+      return !(election.keys().hasAny(['voterRosterConfigured']) && election.voterRosterConfigured == true)
+        || (exists(voter) && get(voter).data.active == true);
+    }
     function validBallotCreate(electionId, ballotId) {
       let profile = get(userPath(request.auth.uid)).data;
       let election = get(/databases/$(database)/documents/elections/$(electionId)).data;
@@ -56,6 +62,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasAll(['round', 'voterId', 'voterName', 'candidateIds', 'submittedAt'])
         && request.resource.data.voterId == profile.voterId
         && request.resource.data.voterName == profile.name
+        && voterIsInElection(electionId, profile.voterId)
         && candidateIds is list
         && candidateIds.size() == requiredCount
         && candidateIds.toSet().size() == requiredCount
@@ -99,6 +106,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasAll(['voterId', 'voterName', 'candidateIds', 'submittedAt'])
         && request.resource.data.voterId == profile.voterId
         && request.resource.data.voterName == profile.name
+        && voterIsInElection(electionId, profile.voterId)
         && candidateIds is list
         && candidateIds.size() == runoff.seats
         && candidateIds.toSet().size() == runoff.seats
@@ -225,6 +233,11 @@ service cloud.firestore {
       allow read: if activeVoter();
       allow create, delete: if admin();
       allow update: if admin() || validVoterCounterUpdate(electionId);
+      match /voters/{voterId} {
+        allow get: if admin() || (activeVoter() && get(userPath(request.auth.uid)).data.voterId == voterId);
+        allow list: if admin();
+        allow create, update, delete: if admin();
+      }
       match /candidates/{candidateId} {
         allow read: if activeVoter();
         allow write: if admin();

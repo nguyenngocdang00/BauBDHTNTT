@@ -136,11 +136,23 @@ function App() {
   const [roleAssignments, setRoleAssignments] = useState({})
   const [members, setMembers] = useState([])
   const [rosterRecords, setRosterRecords] = useState([])
+  const [electionVoterRecords, setElectionVoterRecords] = useState([])
+  const [memberListElectionId, setMemberListElectionId] = useState('')
+  const [memberListVoterRecords, setMemberListVoterRecords] = useState([])
+  const [memberListBallotStatus, setMemberListBallotStatus] = useState({})
+  const [electionAccess, setElectionAccess] = useState(null)
+  const [showElectionVoterPicker, setShowElectionVoterPicker] = useState(false)
+  const [electionVoterPickerSelected, setElectionVoterPickerSelected] = useState([])
+  const [electionVoterSearch, setElectionVoterSearch] = useState('')
+  const [savingElectionVoters, setSavingElectionVoters] = useState(false)
   const [deactivatingMemberId, setDeactivatingMemberId] = useState('')
   const [ballotStatus, setBallotStatus] = useState({})
   const isAdmin = profile?.role === 'admin'
   const rosterMembers = useMemo(() => rosterRecords.filter(person=>person.active===true), [rosterRecords])
+  const electionRosterMembers = useMemo(() => !election ? [] : election.voterRosterConfigured === true ? electionVoterRecords.filter(person=>person.active===true) : rosterMembers, [election,electionVoterRecords,rosterMembers])
   const electionHistoryLocked = Boolean((election?.round1VotedCount||0)>0||(election?.round2VotedCount||0)>0||election?.round1Finalized||election?.round2Finalized||election?.activeRound>1||runoffs.length||Object.values(ballotStatus).some(status=>status?.[1]||status?.[2]))
+  const memberListElection = electionRecords.find(item=>item.id===memberListElectionId) || null
+  const memberListIsCurrent = memberListElectionId===electionId
   const activeRunoff = runoffs.find(item => item.status === 'open') || null
   const displayedRunoff = activeRunoff || [...runoffs].sort((a,b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))[0] || null
   const adminRunoffRound = election?.activeRound === 2 ? 2 : 1
@@ -158,11 +170,27 @@ function App() {
     const profileOnly = members.filter(person => !person.voterId || !rosterIds.has(person.voterId)).map(person => ({ ...person, rosterRecord: false }))
     return [...fromRoster, ...profileOnly]
   }, [members, rosterRecords])
-  const codeableMembers = useMemo(() => rosterMembers.filter(person => person.active === true), [rosterMembers])
+  const electionMemberRows = useMemo(() => {
+    const profilesByVoterId = new Map(members.filter(person => person.voterId).map(person => [person.voterId, person]))
+    const listElection=electionRecords.find(item=>item.id===memberListElectionId)
+    const listRoster=!memberListElectionId?[]:listElection?.voterRosterConfigured===true
+      ? (memberListElectionId===electionId?electionVoterRecords:memberListVoterRecords).filter(person=>person.active===true)
+      : rosterMembers
+    return listRoster.map(person => {
+      const account = profilesByVoterId.get(person.id)
+      const master = rosterRecords.find(item=>item.id===person.id)
+      return { ...person, ...account, id:person.id, active:master?.active===true, electionActive:person.active===true, pendingAccount:!account, rosterRecord:Boolean(master) }
+    })
+  }, [electionRecords,memberListElectionId,electionId,electionVoterRecords,memberListVoterRecords,rosterMembers,members,rosterRecords])
+  const codeableMembers = useMemo(() => electionRosterMembers.filter(person => person.active===true&&rosterRecords.some(master=>master.id===person.id&&master.active===true)), [electionRosterMembers,rosterRecords])
   const filteredCandidateRoster = useMemo(() => {
     const search=normalizeText(candidatePickerSearch)
+    return electionRosterMembers.filter(person=>normalizeText(`${person.name||''} ${person.sector||''}`).includes(search))
+  }, [electionRosterMembers,candidatePickerSearch])
+  const filteredElectionVoterDirectory = useMemo(()=>{
+    const search=normalizeText(electionVoterSearch)
     return rosterMembers.filter(person=>normalizeText(`${person.name||''} ${person.sector||''}`).includes(search))
-  }, [rosterMembers,candidatePickerSearch])
+  },[rosterMembers,electionVoterSearch])
   const roundTallies = talliesByRound[round] || {}
   const ranked = useMemo(() => candidates.filter(person => person.active !== false && (round === 1 || person.elected)).map(person => ({ ...person, votes: roundTallies[person.id] || 0 })).sort((a, b) => b.votes - a.votes), [candidates, roundTallies, round])
   const filtered = ranked.filter(person => `${person.name} ${person.sector}`.toLowerCase().includes(query.toLowerCase()))
@@ -178,7 +206,7 @@ function App() {
     if (election?.round2Finalized) return (election.round2WinnerIds ? election.round2WinnerIds.includes(person.id) : index < round2Seats) ? 'Trúng cử' : 'Chưa trúng cử'
     return 'Chưa chốt'
   }
-  const voterCount = election?.voterCount || 0
+  const voterCount = election?.voterCount ?? electionRosterMembers.length
   const votedCount = election?.[`round${round}VotedCount`] || 0
   const pct = voterCount ? Math.round((votedCount / voterCount) * 100) : 0
   const notify = (message) => { setNotice(message); window.setTimeout(() => setNotice(''), 3000) }
@@ -470,6 +498,9 @@ function App() {
   }, [authUser, profile?.active])
   useEffect(() => {
     setElection(null)
+    setElectionVoterRecords([])
+    setElectionAccess(null)
+    setMemberListElectionId(electionId)
     setCandidates([])
     setRunoffs([])
     setTalliesByRound({})
@@ -480,6 +511,9 @@ function App() {
     liveTallies.current = {}
     setRound(1)
   }, [electionId])
+  useEffect(()=>{
+    if(election?.completed&&memberListElectionId===electionId)setMemberListElectionId('')
+  },[election?.completed,electionId])
   useEffect(() => {
     if (!db || !authUser || !profile?.active) return
     setLoadingData(true)
@@ -511,6 +545,7 @@ function App() {
       setRunoffs(snap.docs.map(item => ({ id: item.id, ...item.data() })))
     }, fail))
     if (profile.role === 'admin') {
+      unsubs.push(onSnapshot(collection(db, 'elections', electionId, 'voters'), snap => setElectionVoterRecords(snap.docs.map(item=>({id:item.id,...item.data()}))), fail))
       unsubs.push(onSnapshot(collection(db, 'users'), snap => setMembers(snap.docs.map(item => ({ id: item.id, ...item.data() })).filter(item => item.role !== 'admin')), fail))
       unsubs.push(onSnapshot(collection(db, 'voterRoster'), snap => setRosterRecords(snap.docs.map(item => ({ id: item.id, ...item.data() }))), fail))
       unsubs.push(onSnapshot(collection(db, 'elections', electionId, 'ballots'), snap => {
@@ -551,6 +586,35 @@ function App() {
     }
     return () => unsubs.forEach(unsubscribe => unsubscribe())
   }, [authUser, profile?.active, profile?.role, electionId])
+  useEffect(() => {
+    if (!db || !isAdmin || !memberListElectionId) { setMemberListVoterRecords([]); return }
+    return onSnapshot(collection(db,'elections',memberListElectionId,'voters'),snap=>setMemberListVoterRecords(snap.docs.map(item=>({id:item.id,...item.data()}))),error=>notify(`Không đọc được danh sách HDT của kỳ: ${error.message}`))
+  }, [memberListElectionId,isAdmin])
+  useEffect(()=>{
+    if(!db||!isAdmin||!memberListElectionId){setMemberListBallotStatus({});return}
+    setMemberListBallotStatus({})
+    const stopBallots=onSnapshot(collection(db,'elections',memberListElectionId,'ballots'),snap=>{
+      const result={}
+      snap.docs.forEach(item=>{const ballot=item.data();if(ballot.voterId&&[1,2].includes(ballot.round))result[ballot.voterId]={...(result[ballot.voterId]||{}),[ballot.round]:true}})
+      setMemberListBallotStatus(current=>({...current,...result}))
+    },error=>notify(`Không đọc được trạng thái bỏ phiếu của kỳ: ${error.message}`))
+    const stopLegacyRounds=onSnapshot(collectionGroup(db,'rounds'),snap=>{
+      const result={}
+      snap.docs.forEach(item=>{
+        if(item.ref.parent.parent?.id!==memberListElectionId)return
+        const ballot=item.data()
+        if(ballot.voterId&&[1,2].includes(ballot.round)&&Array.isArray(ballot.candidateIds))result[ballot.voterId]={...(result[ballot.voterId]||{}),[ballot.round]:true}
+      })
+      setMemberListBallotStatus(current=>({...current,...result}))
+    },error=>notify(`Không đọc được phiếu cũ của kỳ: ${error.message}`))
+    return () => { stopBallots(); stopLegacyRounds() }
+  },[memberListElectionId,isAdmin])
+  useEffect(() => {
+    setElectionAccess(null)
+    if (!db || profile?.role!=='voter' || !profile?.voterId || !election) return
+    if (election.voterRosterConfigured!==true) { setElectionAccess(true); return }
+    return onSnapshot(doc(db,'elections',electionId,'voters',profile.voterId),snap=>setElectionAccess(snap.exists()&&snap.data().active===true),()=>setElectionAccess(false))
+  }, [electionId,election?.voterRosterConfigured,profile?.role,profile?.voterId])
   useEffect(() => {
     setRunoffVoted(false)
     if (!db || !activeRunoff?.id || !profile?.voterId) return
@@ -634,6 +698,7 @@ function App() {
     return () => { cancelled = true; stops.forEach(stop => stop()) }
   }, [db, isAdmin, electionId, election?.status, election?.activeRound, candidates])
   const selectCandidate = (id) => {
+    if (!isAdmin && electionAccess===false) return notify('Bạn không nằm trong danh sách cử tri của kỳ bầu cử này. Hãy liên hệ admin đoàn.')
     if (activeRunoff) {
       if (runoffVoted) return notify('Bạn đã bỏ phiếu phụ đợt này rồi.')
       if (activeRunoff.status !== 'open') return notify('Đợt bỏ phiếu phụ đã đóng.')
@@ -646,6 +711,7 @@ function App() {
     if (!selected.includes(id) && selected.length >= maxSelection) notify(`Bạn chỉ có thể chọn tối đa ${maxSelection} người.`)
   }
   const submitRunoffBallot = async () => {
+    if (!isAdmin && electionAccess===false) return notify('Bạn không nằm trong danh sách cử tri của kỳ bầu cử này.')
     if (!activeRunoff || !profile?.voterId) return notify('Không tìm thấy đợt bỏ phiếu phụ đang mở hoặc hồ sơ HDT.')
     if (runoffVoted) return notify('Bạn đã bỏ phiếu phụ đợt này rồi.')
     if (selected.length !== activeRunoff.seats) return notify(`Vui lòng chọn đúng ${activeRunoff.seats} người trong nhóm hòa phiếu.`)
@@ -676,6 +742,7 @@ function App() {
     }
   }
   const submitBallot = async () => {
+    if (!isAdmin && electionAccess===false) return notify('Bạn không nằm trong danh sách cử tri của kỳ bầu cử này.')
     if (activeRunoff) return submitRunoffBallot()
     if (selected.length !== maxSelection) return notify(`Vui lòng chọn đủ ${maxSelection} người trước khi xác nhận.`)
     if (election?.status !== 'open' || election?.activeRound !== round || votedRounds[round]) return notify('Vòng này hiện không nhận thêm phiếu.')
@@ -747,7 +814,7 @@ function App() {
       endsAt,
       round1Seats: configuredRound1Seats,
       round2Seats: configuredRound2Seats,
-      voterCount: rosterMembers.length,
+      voterCount: electionRosterMembers.length,
     }
   }
   const saveElectionConfiguration = async () => {
@@ -798,7 +865,9 @@ function App() {
         term: '',
         description: '',
         endsAt: null,
-        voterCount: rosterMembers.length,
+        voterCount: 0,
+        voterRosterConfigured: true,
+        voterIds: [],
         status: 'closed',
         activeRound: 1,
         completed: false,
@@ -855,7 +924,7 @@ function App() {
         await batch.commit()
       }
       await updateDoc(electionRef,{
-        status:'closed',activeRound:1,completed:false,endsAt:null,voterCount:rosterMembers.length,
+        status:'closed',activeRound:1,completed:false,endsAt:null,voterCount:electionRosterMembers.length,
         round1VotedCount:0,round2VotedCount:0,round1CandidateIds:[],round2CandidateIds:[],round1WinnerIds:[],round2WinnerIds:[],
         round1Finalized:false,round2Finalized:false,round1FinalizedAt:deleteField(),round2FinalizedAt:deleteField(),roles:{},
         resetAt:serverTimestamp(),resetBy:authUser.uid,
@@ -879,7 +948,7 @@ function App() {
     setDeletingElection(true)
     try {
       const electionRef=doc(db,'elections',electionToDeleteId)
-      const [electionSnap,ballots,candidateDocs,runoffDocs,round1Tallies,round2Tallies,legacyRounds,activeElectionSnap]=await Promise.all([
+      const [electionSnap,ballots,candidateDocs,runoffDocs,round1Tallies,round2Tallies,legacyRounds,activeElectionSnap,voterDocs]=await Promise.all([
         getDoc(electionRef),
         getDocs(collection(db,'elections',electionToDeleteId,'ballots')),
         getDocs(collection(db,'elections',electionToDeleteId,'candidates')),
@@ -888,6 +957,7 @@ function App() {
         getDocs(collection(db,'elections',electionToDeleteId,'tallies','round2','candidates')),
         getDocs(collectionGroup(db,'rounds')),
         getDoc(doc(db,'appSettings','activeElection')),
+        getDocs(collection(db,'elections',electionToDeleteId,'voters')),
       ])
       if (!electionSnap.exists()) return notify('Nhiệm kỳ đã bị xóa hoặc không còn tồn tại.')
       if (activeElectionSnap.exists()&&activeElectionSnap.data().electionId===electionToDeleteId) return notify('Đây là kỳ đang hoạt động. Hãy chuyển sang kỳ khác trước khi xóa.')
@@ -895,6 +965,7 @@ function App() {
       const legacyForElection=legacyRounds.docs.filter(item=>item.ref.parent.parent?.id===electionToDeleteId)
       const hasElectionHistory=data.status==='open'||data.activeRound!==1||(data.round1VotedCount||0)>0||(data.round2VotedCount||0)>0||data.round1Finalized===true||data.round2Finalized===true||[...(data.round1CandidateIds||[]),...(data.round2CandidateIds||[]),...(data.round1WinnerIds||[]),...(data.round2WinnerIds||[])].length>0||Object.keys(data.roles||{}).length>0
       if (hasElectionHistory||!ballots.empty||!candidateDocs.empty||!runoffDocs.empty||!round1Tallies.empty||!round2Tallies.empty||legacyForElection.length) return notify('Chưa xóa được: nhiệm kỳ vẫn còn dữ liệu. Hãy dùng “Đặt lại dữ liệu kỳ này”, sau đó thử lại.')
+      if(!voterDocs.empty){for(let offset=0;offset<voterDocs.docs.length;offset+=450){const batch=writeBatch(db);voterDocs.docs.slice(offset,offset+450).forEach(item=>batch.delete(item.ref));await batch.commit()}}
       await deleteDoc(electionRef)
       setElectionToDeleteId('')
       notify(`Đã xóa nhiệm kỳ “${label}”. Danh sách HDT và các kỳ khác không bị ảnh hưởng.`)
@@ -904,8 +975,8 @@ function App() {
   const openCandidatePicker = () => {
     if (!isAdmin) return notify('Chỉ admin đoàn mới được chọn ứng viên.')
     if (election?.status === 'open' || electionHistoryLocked) return notify('Danh sách ứng viên đã khóa vì kỳ này đã bắt đầu.')
-    if (!rosterMembers.length) return notify('Trước tiên hãy thêm HDT vào mục Danh sách HDT.')
-    const rosterIds=new Set(rosterMembers.map(person=>person.id))
+    if (!electionRosterMembers.length) return notify('Trước tiên hãy chọn HDT tham gia kỳ bầu cử này.')
+    const rosterIds=new Set(electionRosterMembers.map(person=>person.id))
     setCandidatePickerSelected(candidates.filter(person=>person.active!==false&&rosterIds.has(person.id)).map(person=>person.id))
     setCandidatePickerSearch('')
     setShowCandidatePicker(true)
@@ -917,13 +988,13 @@ function App() {
     if (!selectedIds.size) return notify('Chọn ít nhất một Huynh trưởng đủ điều kiện ứng cử.')
     const candidateById = new Map(candidates.map(person=>[person.id,person]))
     const writes = []
-    rosterMembers.forEach(person=>{
+    electionRosterMembers.forEach(person=>{
       const existing = candidateById.get(person.id)
       if (selectedIds.has(person.id)) {
         writes.push({id:person.id,data:{name:person.name,sector:person.sector,active:true,electedRound1:existing?.elected===true}})
       } else if (existing?.active !== false) writes.push({id:person.id,data:{active:false,electedRound1:false}})
     })
-    candidates.filter(person=>!rosterMembers.some(roster=>roster.id===person.id)&&person.active!==false).forEach(person=>writes.push({id:person.id,data:{active:false,electedRound1:false}}))
+    candidates.filter(person=>!electionRosterMembers.some(roster=>roster.id===person.id)&&person.active!==false).forEach(person=>writes.push({id:person.id,data:{active:false,electedRound1:false}}))
     setSyncingCandidates(true)
     try {
       for (let offset=0;offset<writes.length;offset+=450) {
@@ -935,6 +1006,32 @@ function App() {
       notify(`Đã lưu ${selectedIds.size} HDT vào danh sách ứng viên vòng 1.`)
     } catch (error) { notify(`Không lưu được danh sách ứng viên: ${error.message}`) }
     finally { setSyncingCandidates(false) }
+  }
+  const openElectionVoterPicker = () => {
+    if (!isAdmin) return notify('Chỉ admin đoàn mới được chọn cử tri cho kỳ.')
+    if (election?.status==='open'||electionHistoryLocked||election?.completed) return notify('Danh sách cử tri đã khóa vì kỳ này đã bắt đầu.')
+    const ids=election?.voterRosterConfigured===true?electionVoterRecords.map(person=>person.id):rosterMembers.map(person=>person.id)
+    setElectionVoterPickerSelected(ids)
+    setElectionVoterSearch('')
+    setShowElectionVoterPicker(true)
+  }
+  const saveElectionVoters = async () => {
+    if (!isAdmin) return notify('Chỉ admin đoàn mới được lưu danh sách cử tri.')
+    if (election?.status==='open'||electionHistoryLocked||election?.completed) return notify('Danh sách cử tri đã khóa vì kỳ này đã bắt đầu.')
+    const selected=[...new Set(electionVoterPickerSelected)].map(id=>rosterRecords.find(person=>person.id===id)).filter(person=>person?.active===true)
+    if (selected.length!==new Set(electionVoterPickerSelected).size) return notify('Một số hồ sơ đã ngừng kích hoạt. Hãy tải lại danh sách rồi chọn lại.')
+    if (selected.length<round1Seats) return notify(`Chọn ít nhất ${round1Seats} HDT làm cử tri cho kỳ này.`)
+    setSavingElectionVoters(true)
+    try {
+      const selectedIds=new Set(selected.map(person=>person.id))
+      const removals=election?.voterRosterConfigured===true?electionVoterRecords.filter(person=>!selectedIds.has(person.id)):[]
+      const removedCandidates=candidates.filter(person=>!selectedIds.has(person.id)&&person.active!==false)
+      const operations=[...selected.map(person=>({type:'set',id:person.id,data:{name:person.name,email:person.email||'',sector:person.sector||'',birthDate:person.birthDate||'',active:true,addedAt:serverTimestamp()}})),...removals.map(person=>({type:'delete',id:person.id})),...removedCandidates.map(person=>({type:'deactivateCandidate',id:person.id}))]
+      for(let offset=0;offset<operations.length;offset+=450){const batch=writeBatch(db);operations.slice(offset,offset+450).forEach(item=>item.type==='set'?batch.set(doc(db,'elections',electionId,'voters',item.id),item.data):item.type==='delete'?batch.delete(doc(db,'elections',electionId,'voters',item.id)):batch.set(doc(db,'elections',electionId,'candidates',item.id),{active:false,electedRound1:false},{merge:true}));await batch.commit()}
+      await updateDoc(doc(db,'elections',electionId),{voterRosterConfigured:true,voterIds:selected.map(person=>person.id),voterCount:selected.length,voterRosterUpdatedAt:serverTimestamp()})
+      setShowElectionVoterPicker(false)
+      notify(`Đã lưu ${selected.length} cử tri riêng cho kỳ ${election?.term||''}.`)
+    }catch(error){notify(`Không lưu được danh sách cử tri: ${error.message}`)}finally{setSavingElectionVoters(false)}
   }
   const toggleCandidate = async person => {
     if (election?.status === 'open') return notify('Hãy đóng vòng bầu cử trước khi thay đổi danh sách ứng viên.')
@@ -981,7 +1078,7 @@ function App() {
     const payload = electionSettingsPayload()
     if (!payload) return
     const activeCandidates = candidates.filter(candidate => candidate.active !== false)
-    if (payload.voterCount < payload.round1Seats || activeCandidates.length < payload.round1Seats) return notify(`Cần ít nhất ${payload.round1Seats} HDT và ${payload.round1Seats} ứng viên đang hoạt động để mở vòng 1.`)
+    if (payload.voterCount < payload.round1Seats || activeCandidates.length < payload.round1Seats) return notify(`Cần ít nhất ${payload.round1Seats} cử tri và ${payload.round1Seats} ứng viên đang hoạt động để mở vòng 1.`)
     if (!window.confirm(`Mở vòng 1 cho ${payload.voterCount} HDT?`)) return
     setSavingElection(true)
     try {
@@ -1168,7 +1265,7 @@ function App() {
         candidateIds: selectedCandidates.map(person => person.id),
         seats,
         status: 'open',
-        voterCount: rosterMembers.length,
+        voterCount: electionRosterMembers.length,
         votedCount: 0,
         endsAt,
         createdAt: serverTimestamp(),
@@ -1262,7 +1359,7 @@ function App() {
             onResetElection={resetElectionData} resettingElection={resettingElection} hasActiveRunoff={Boolean(activeRunoff)}
             electionToDeleteId={electionToDeleteId} setElectionToDeleteId={setElectionToDeleteId} onDeleteEmptyElection={deleteEmptyElection} deletingElection={deletingElection}
             historyLocked={electionHistoryLocked}
-            rosterMembers={rosterMembers} candidates={candidates} runoffs={runoffs} round2Tallies={talliesByRound[2]||{}}
+            rosterMembers={electionRosterMembers} candidates={candidates} runoffs={runoffs} round2Tallies={talliesByRound[2]||{}}
             round2Winners={round2Winners} setRound2Winners={setRound2Winners} onFinalizeRound2={finalizeRound2} finalizingRound2={finalizingRound2}
             saving={savingElection} syncing={syncingCandidates}
             onSave={saveElectionConfiguration} onOpenCandidatePicker={openCandidatePicker} onSaveCandidateSelection={saveCandidateSelection}
@@ -1278,7 +1375,7 @@ function App() {
             selectedIds={runoffCandidateIds} setSelectedIds={setRunoffCandidateIds}
             seats={runoffSeats} setSeats={setRunoffSeats} endsAt={runoffEndsAt} setEndsAt={setRunoffEndsAt}
             winners={runoffWinners} setWinners={setRunoffWinners}
-            rosterCount={rosterMembers.length} round1Seats={round1Seats} round2Seats={round2Seats} electionRound={election?.activeRound||1} round2CandidateIds={election?.round2CandidateIds||[]} round2Tallies={talliesByRound[2]||{}} isElectionOpen={election?.status==='open'} resultFinalized={election?.activeRound===2?election?.round2Finalized:election?.round1Finalized} saving={savingRunoff}
+            rosterCount={electionRosterMembers.length} round1Seats={round1Seats} round2Seats={round2Seats} electionRound={election?.activeRound||1} round2CandidateIds={election?.round2CandidateIds||[]} round2Tallies={talliesByRound[2]||{}} isElectionOpen={election?.status==='open'} resultFinalized={election?.activeRound===2?election?.round2Finalized:election?.round1Finalized} saving={savingRunoff}
             onCreate={createRunoff} onClose={closeRunoff} onFinalize={finalizeRunoff}
           />
         </>}
@@ -1289,18 +1386,20 @@ function App() {
           <section className="panel activity-panel"><PanelTitle title="Trạng thái dữ liệu" subtitle="Cập nhật trực tiếp từ Firebase"/><div className="activity-list"><Activity color="purple" icon={<Users size={15}/>} title={`${candidates.length} ứng viên`} detail="Danh sách đồng bộ từ Firestore" time={loadingData?'Đang tải…':'Đang cập nhật trực tiếp'}/><Activity color="green" icon={<Vote size={15}/>} title={election?.completed?'Kỳ bầu cử đã hoàn tất':election?.status==='open'?`Vòng ${election.activeRound} đang mở`:'Kỳ bầu cử đang đóng'} detail="Trạng thái lấy từ tài liệu kỳ bầu cử" time="Firebase Firestore"/><Activity color="orange" icon={<ShieldCheck size={15}/>} title={isAdmin?'Quyền admin đoàn':'Tài khoản HDT'} detail="Quyền được đọc từ hồ sơ đã duyệt" time={authUser.email}/></div></section></div>
           <section className="panel winners-panel"><PanelTitle title="Danh sách đang dẫn đầu" subtitle={`Top ${round1Seats} Huynh trưởng có số phiếu cao nhất vòng 1`} action="Xem tất cả kết quả" onAction={() => setTab('results')}/><div className="table-wrap"><table><thead><tr><th>HẠNG</th><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>SỐ PHIẾU</th><th>TỶ LỆ</th><th>TRẠNG THÁI</th></tr></thead><tbody>{ranked.slice(0,round1Seats).map((person,index)=><tr key={person.id}><td><span className={`rank ${index===0?'first':''}`}>{String(index+1).padStart(2,'0')}</span></td><td><div className="person-cell"><Avatar person={person} size="small"/><b>{person.name}</b></div></td><td><span className="sector-chip">{person.sector.replace('Ngành ','')}</span></td><td><b>{person.votes}</b> phiếu</td><td><span className="table-progress"><i style={{width:`${Math.round(person.votes/(ranked[0]?.votes || 1)*100)}%`}}/></span> {Math.round(person.votes/(voterCount || 1)*100)}%</td><td><span className="status-chip elected"><i/> Đang dẫn đầu</span></td></tr>)}</tbody></table></div></section>
         </>}
+        {tab==='vote'&&!isAdmin&&electionAccess===false&&<div className="election-access-warning"><ShieldCheck size={17}/><span><b>Bạn chưa được thêm vào danh sách cử tri của kỳ này.</b> Liên hệ admin đoàn để được cập nhật danh sách. Quyền bỏ phiếu của các kỳ khác không bị ảnh hưởng.</span></div>}
         {tab === 'vote' && <div className="vote-layout"><section className="panel ballot-panel"><div className="ballot-top"><div><span className="banner-kicker">{activeRunoff ? `PHIẾU PHỤ · VÒNG ${activeRunoff.sourceRound}` : `PHIẾU BẦU CỬ · VÒNG ${round}`}</span><h2>{activeRunoff ? `Chọn ${activeRunoff.seats} người trong nhóm hòa phiếu` : round === 1 ? `Chọn ${round1Seats} thành viên Ban điều hành` : `Chọn ${round2Seats} thành viên Ban Thường vụ`}</h2><p>{activeRunoff ? 'Đây là phiếu phụ riêng. Phiếu vòng 1 đã gửi không bị thay đổi.' : round === 1 ? `Chọn ${round1Seats} Huynh trưởng mà bạn tín nhiệm. Bạn có thể tự bầu cho mình.` : `Chọn ${round2Seats} người trong danh sách ${round1Seats} thành viên đã trúng cử.`}</p></div>{!activeRunoff && <div className="round-switch"><button className={round===1?'selected':''} onClick={() => {setRound(1);setSelected([])}}>Vòng 1</button><button className={round===2?'selected':''} onClick={() => {setRound(2);setSelected([])}}>Vòng 2</button></div>}</div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label><button className="filter-button"><SlidersHorizontal size={15}/> Tất cả ngành <ChevronDown size={14}/></button><span className="selection-count">Đã chọn <b>{selected.length}</b> / {maxSelection}</span></div><div className="candidate-grid">{ballotCandidates.filter(person=>`${person.name} ${person.sector}`.toLowerCase().includes(query.toLowerCase())).map(person=><button key={person.id} className={`candidate-card ${selected.includes(person.id)?'chosen':''}`} onClick={()=>selectCandidate(person.id)}><Avatar person={person}/><span className="candidate-name"><b>{person.name}</b><small>{person.sector}</small></span><span className={`checkbox ${selected.includes(person.id)?'checked':''}`}>{selected.includes(person.id)&&<Check size={13}/>}</span></button>)}</div><div className="ballot-footer"><span><ShieldCheck size={16}/> Phiếu bầu của bạn được bảo mật</span><button className="primary-button" onClick={submitBallot}>Xác nhận {activeRunoff ? 'phiếu phụ' : 'phiếu bầu'} <ChevronRight size={16}/></button></div></section><aside className="panel ballot-aside"><div className="aside-icon"><ClipboardList size={20}/></div><h3>Hướng dẫn bỏ phiếu</h3><ol><li><span>1</span><p>Chọn đúng <b>{maxSelection} Huynh trưởng</b> mà bạn tín nhiệm.</p></li><li><span>2</span><p>Bạn có thể <b>tự chọn chính mình</b> trong danh sách.</p></li><li><span>3</span><p>Kiểm tra lựa chọn trước khi nhấn xác nhận.</p></li><li><span>4</span><p>Sau khi gửi, phiếu bầu <b>không thể chỉnh sửa</b>.</p></li></ol><div className="aside-note"><ShieldCheck size={15}/><span>{activeRunoff ? 'Mỗi HDT chỉ được gửi một phiếu cho đợt phụ này.' : 'Mỗi Huynh trưởng chỉ được bỏ phiếu một lần trong mỗi vòng.'}</span></div><div className="aside-deadline"><Clock3 size={16}/><span>Hạn bỏ phiếu<b>{(activeRunoff?.endsAt || election?.endsAt)?.toDate ? (activeRunoff?.endsAt || election.endsAt).toDate().toLocaleString('vi-VN', { timeZone: 'Asia/Bangkok' }) : 'Chưa thiết lập'}</b></span></div></aside></div>}
         {tab === 'results' && <>
           <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">KỲ BẦU CỬ · {election?.term || 'Nhiệm kỳ chưa thiết lập'}</span><h2>Kết quả vòng {round}</h2><p>Công khai đầy đủ số phiếu của từng ứng viên.</p></div><button className="outline-button" onClick={downloadElectionMinutes}><Download size={16}/> Tải biên bản CSV</button></div><div className="result-tabs"><button className={round===1?'selected':''} onClick={()=>setRound(1)}>Vòng 1 · Bầu {round1Seats} thành viên</button><button className={round===2?'selected':''} onClick={()=>setRound(2)}>Vòng 2 · Bầu {round2Seats}</button></div><div className="table-wrap"><table><thead><tr><th>HẠNG</th><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>SỐ PHIẾU</th><th>TỶ LỆ PHIẾU</th><th>KẾT QUẢ</th></tr></thead><tbody>{ranked.map((person,index)=><tr key={person.id}><td><span className={`rank ${index<maxSelection?'first':''}`}>{String(index+1).padStart(2,'0')}</span></td><td><div className="person-cell"><Avatar person={person} size="small"/><b>{person.name}</b></div></td><td><span className="sector-chip">{person.sector.replace('Ngành ','')}</span></td><td><b>{person.votes}</b> phiếu</td><td><div className="result-vote"><ProgressBar value={Math.round(person.votes/(ranked[0]?.votes || 1)*100)} color={index<maxSelection?'green':'gray'}/><span>{Math.round(person.votes/(voterCount || 1)*100)}%</span></div></td><td><span className={`status-chip ${resultStatus(person,index)==="Trúng cử"||resultStatus(person,index)==="Đang dẫn đầu"?"elected":"pending"}`}>{resultStatus(person,index)}</span></td></tr>)}</tbody></table></div><div className="aside-note">Admin chốt danh sách trúng cử trong mục “Kỳ bầu cử” sau khi xử lý mọi trường hợp hòa phiếu.</div></section>
           {resultRunoff?.status==='closed'&&<RunoffPublicResults runoff={resultRunoff} candidates={candidates} originalTallies={talliesByRound[resultRunoff.sourceRound||1]||{}} runoffTallies={resultRunoffTallies}/>}
         </>}
         {tab === 'roles' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">CƠ CẤU BAN ĐIỀU HÀNH</span><h2>Phân công chức vụ nhiệm kỳ</h2><p>Chức vụ được phân công theo cơ cấu hiện tại; danh sách thành viên lấy theo số ghế đã cấu hình cho từng vòng.</p></div><button className="primary-button" onClick={saveRoleAssignments}>Lưu phân công <Check size={15}/></button></div><div className="roles-grid">{roles.map((role,index)=>{const pool=index<5?ranked.filter(p=>p.elected).slice(0,round2Seats):ranked.filter(p=>p.elected).slice(round2Seats);return <div className="role-card" key={role.title}><div className={`role-symbol ${role.color}`}>{role.icon}</div><div className="role-detail"><span>{role.category}</span><b>{role.title}</b><select value={roleAssignments[role.title]||''} onChange={e=>setRoleAssignments({...roleAssignments,[role.title]:e.target.value})}><option value="">Chọn Huynh trưởng</option>{pool.map(person=><option value={person.id} key={person.id}>{person.name}</option>)}</select></div></div>})}</div><div className="aside-note"><ShieldCheck size={15}/> Phân công mẫu minh họa. Cần lưu xác nhận của Ban Thường vụ trước khi công bố.</div></section>}
-    {tab === 'members' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">DANH SÁCH CỬ TRI</span><h2>Huynh trưởng Xứ đoàn</h2><p>{rosterMembers.length} HDT đang hoạt động · {rosterRecords.length-rosterMembers.length} đã ngừng kích hoạt</p></div><div className="member-header-actions"><button className="outline-button" disabled={issuingCodes||!codeableMembers.length} onClick={()=>issueLoginCodes(codeableMembers)}>{issuingCodes?'Đang cấp mã…':`Cấp mã cho ${codeableMembers.length} HDT`}</button><button className="primary-button" onClick={()=>setShowAddMembers(true)}>+ Thêm HDT</button></div></div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label><small>Mỗi mã dùng một lần, hết hạn sau 4 giờ.</small></div><div className="table-wrap"><table><thead><tr><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>NGÀY SINH</th><th>TÀI KHOẢN</th><th>VÒNG 1</th><th>VÒNG 2</th><th>MÃ ĐĂNG NHẬP</th><th>TRẠNG THÁI</th></tr></thead><tbody>{memberRows.filter(person=>`${person.name||person.email||''} ${person.sector||''}`.toLowerCase().includes(query.toLowerCase())).map(person=><tr key={person.id}><td><div className="person-cell"><Avatar person={{...person,initials:person.initials||String(person.name||person.email||'?').split(/\s+/).slice(-2).map(x=>x[0]).join('').toUpperCase(),color:person.color||'mint'}} size="small"/><b>{person.name||person.email}</b></div></td><td><span className="sector-chip">{person.sector||'—'}</span></td><td>{person.birthDate?person.birthDate.split('-').reverse().join('/'):'—'}</td><td><span className={`status-chip ${person.active?'elected':'pending'}`}><i/> {person.active?'Hoạt động':'Đã ngừng'}</span></td><td><span className={`status-chip ${ballotStatus[person.id]?.[1]||person.round1Voted?'done':'pending'}`}>{ballotStatus[person.id]?.[1]||person.round1Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><span className={`status-chip ${ballotStatus[person.id]?.[2]||person.round2Voted?'done':'pending'}`}>{ballotStatus[person.id]?.[2]||person.round2Voted?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><button className="outline-button" disabled={!person.rosterRecord||issuingCodes||deactivatingMemberId===person.id||!person.active} onClick={()=>issueLoginCode(person)}>{!person.rosterRecord?'Không có mã':!person.active?'Đã khóa':person.pendingAccount?'Cấp mã':'Cấp lại mã'}</button></td><td>{person.rosterRecord?<button className={person.active?'deactivate-button':'outline-button'} disabled={deactivatingMemberId===person.id} onClick={()=>setMemberActive(person)}>{deactivatingMemberId===person.id?'Đang lưu…':person.active?'Ngừng kích hoạt':'Kích hoạt lại'}</button>:<span>—</span>}</td></tr>)}</tbody></table>{!memberRows.length&&<div className="empty-state">Chưa có hồ sơ HDT trong danh sách.</div>}</div></section>}
+    {tab === 'members' && <section className="panel results-panel"><div className="results-header"><div><span className="banner-kicker">DANH SÁCH CỬ TRI THEO KỲ</span><h2>Huynh trưởng Xứ đoàn</h2><p>{electionMemberRows.length} cử tri · {memberListElection?.term||memberListElection?.name||(memberListElectionId?'Kỳ bầu cử':'Chưa chọn kỳ')}{memberListElectionId&&!memberListElection?.voterRosterConfigured?' · kỳ cũ dùng danh bạ chung':''}</p></div><div className="member-header-actions"><label className="member-election-select"><span>Xem danh sách kỳ</span><select value={memberListElectionId} onChange={event=>setMemberListElectionId(event.target.value)}><option value="">Chọn kỳ bầu cử để xem</option>{electionRecords.map(item=><option key={item.id} value={item.id}>{item.term?`${item.term} · `:''}${item.name||'Kỳ bầu cử'}</option>)}</select></label>{memberListIsCurrent&&<button className="outline-button" disabled={savingElectionVoters||electionHistoryLocked||election?.status==='open'||election?.completed} onClick={openElectionVoterPicker}>{savingElectionVoters?'Đang lưu…':'Chọn cử tri cho kỳ này'}</button>}<button className="outline-button" disabled={!memberListIsCurrent||issuingCodes||!codeableMembers.length} onClick={()=>issueLoginCodes(codeableMembers)}>{issuingCodes?'Đang cấp mã…':`Cấp mã cho ${memberListIsCurrent?codeableMembers.length:0} HDT`}</button><button className="primary-button" onClick={()=>setShowAddMembers(true)}>+ Thêm vào danh bạ</button></div></div><div className="ballot-toolbar"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Tìm kiếm Huynh trưởng..."/></label><small>Mỗi mã dùng một lần, hết hạn sau 4 giờ. Danh sách được lưu riêng theo kỳ.</small></div><div className="table-wrap"><table><thead><tr><th>HUYNH TRƯỞNG</th><th>NGÀNH</th><th>NGÀY SINH</th><th>TÀI KHOẢN</th><th>VÒNG 1</th><th>VÒNG 2</th><th>MÃ ĐĂNG NHẬP</th><th>TRẠNG THÁI KỲ</th></tr></thead><tbody>{electionMemberRows.filter(person=>`${person.name||person.email||''} ${person.sector||''}`.toLowerCase().includes(query.toLowerCase())).map(person=><tr key={person.id}><td><div className="person-cell"><Avatar person={{...person,initials:person.initials||String(person.name||person.email||'?').split(/\s+/).slice(-2).map(x=>x[0]).join('').toUpperCase(),color:person.color||'mint'}} size="small"/><b>{person.name||person.email}</b></div></td><td><span className="sector-chip">{person.sector||'—'}</span></td><td>{person.birthDate?person.birthDate.split('-').reverse().join('/'):'—'}</td><td><span className={`status-chip ${person.active?'elected':'pending'}`}><i/> {person.active?'Hoạt động':'Đã ngừng'}</span></td><td><span className={`status-chip ${memberListBallotStatus[person.id]?.[1]?'done':'pending'}`}>{memberListBallotStatus[person.id]?.[1]?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><span className={`status-chip ${memberListBallotStatus[person.id]?.[2]?'done':'pending'}`}>{memberListBallotStatus[person.id]?.[2]?'Đã bỏ phiếu':'Chưa bỏ phiếu'}</span></td><td><button className="outline-button" disabled={!memberListIsCurrent||!person.rosterRecord||issuingCodes||!person.active} onClick={()=>issueLoginCode(person)}>{!person.rosterRecord?'Không có mã':!memberListIsCurrent?'Xem kỳ cũ':!person.active?'Đã khóa':person.pendingAccount?'Cấp mã':'Cấp lại mã'}</button></td><td><span className={`status-chip ${person.electionActive?'elected':'pending'}`}>{person.electionActive?'Trong danh sách kỳ':'Không tham gia kỳ'}</span></td></tr>)}</tbody></table>{!electionMemberRows.length&&<div className="empty-state">{!memberListElectionId?'Chọn kỳ bầu cử ở trên để xem danh sách đã lưu.':'Kỳ này chưa có cử tri. Hãy chọn HDT từ danh bạ để tạo danh sách riêng cho kỳ.'}</div>}</div></section>}
         <footer className="footer"><span>© {new Date().getFullYear()} Đoàn Gioan Baotixita · Giáo xứ Bảo Sơn</span><div><span>Được xây dựng với <b>♥</b> và tinh thần phục vụ</span><i/> <button onClick={()=>notify(`Kết nối Firebase: ${firebaseConfigured?'đã cấu hình':'chưa cấu hình'}`)}>Phiên bản 1.0.0</button></div></footer>
       </div>
     </main>
-    {showAddMembers&&<div className="modal-backdrop"><section className="panel code-modal add-members-modal"><button className="modal-close" onClick={()=>setShowAddMembers(false)} aria-label="Đóng"><X size={18}/></button><div className="admin-icon"><Users size={18}/></div><h2>Thêm Huynh trưởng</h2><div className="member-input-tabs"><button className={memberInputMode==='manual'?'selected':''} onClick={()=>setMemberInputMode('manual')}>Nhập biểu mẫu</button><button className={memberInputMode==='excel'?'selected':''} onClick={()=>setMemberInputMode('excel')}>Import Excel</button></div>{memberInputMode==='manual'?<form className="member-entry-form" onSubmit={addManualMember}><label><span className="member-label-heading">Họ và tên <b>*</b></span><input autoFocus value={memberEntry.name} onChange={event=>setMemberEntry({...memberEntry,name:event.target.value})} placeholder="Ví dụ: Nguyễn Văn An"/></label><label><span className="member-label-heading">Ngành <b>*</b></span><select required value={memberEntry.sector} onChange={event=>setMemberEntry({...memberEntry,sector:event.target.value})}><option value="">Chọn ngành</option>{sectors.map(sector=><option key={sector} value={sector}>{sector}</option>)}</select></label><label>Ngày sinh <span>(không bắt buộc)</span><input type="date" value={memberEntry.birthDate} max={new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok'}).format(new Date())} onChange={event=>setMemberEntry({...memberEntry,birthDate:event.target.value})}/></label><label>Email (không bắt buộc)<input type="email" value={memberEntry.email} onChange={event=>setMemberEntry({...memberEntry,email:event.target.value})} placeholder="ten@example.com"/></label><button className="outline-button" type="submit" disabled={pendingMembers.length>=300}>+ Thêm vào danh sách</button></form>:<div className="member-excel-import"><p>Chọn file Excel <b>.xlsx</b> hoặc CSV. Cột A là họ tên, B là ngành, C là ngày sinh, D là email (không bắt buộc). Ngày sinh có thể để trống. Có thể có dòng tiêu đề.</p><input ref={memberFileRef} type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onChange={importMemberFile} disabled={importingMembers||pendingMembers.length>=300}/><button type="button" className="template-download" onClick={downloadMemberTemplate}>Tải mẫu CSV (mở bằng Excel)</button>{importingMembers&&<small>Đang đọc file…</small>}</div>}{pendingMembers.length>0&&<div className="pending-members"><b>Danh sách chờ thêm ({pendingMembers.length})</b><ul>{pendingMembers.map((person,index)=><li key={`${person.name}-${index}`}><span><b>{person.name}</b><small>{person.sector||'Chưa chọn ngành'}{person.birthDate?` · ${person.birthDate.split('-').reverse().join('/')}`:''}{person.email?` · ${person.email}`:''}</small></span><button type="button" onClick={()=>setPendingMembers(items=>items.filter((_,itemIndex)=>itemIndex!==index))} aria-label={`Xóa ${person.name}`}><X size={15}/></button></li>)}</ul></div>}<small className="member-modal-note">Hồ sơ được kích hoạt ngay. Sau khi lưu danh sách, admin cấp mã riêng cho từng Huynh trưởng. Mã chỉ dùng một lần và hết hạn sau 4 giờ.</small><div className="add-members-actions"><button className="outline-button" onClick={()=>setShowAddMembers(false)} disabled={savingMembers}>Hủy</button><button className="primary-button" onClick={addMembers} disabled={savingMembers||importingMembers||!pendingMembers.length}>{savingMembers?'Đang lưu…':`Lưu ${pendingMembers.length||''} hồ sơ`}</button></div></section></div>}
-    {showCandidatePicker&&<div className="modal-backdrop"><section className="panel candidate-picker-modal"><button className="modal-close" onClick={()=>setShowCandidatePicker(false)} aria-label="Đóng"><X size={18}/></button><div className="admin-icon"><Users size={18}/></div><h2>Chọn HDT đủ điều kiện ứng cử</h2><p>Chọn riêng những người được tham gia vòng 1. Danh sách HDT chung không bị thay đổi; những người không chọn sẽ không xuất hiện trong lá phiếu của kỳ này.</p><label className="search-box candidate-picker-search"><Search size={16}/><input value={candidatePickerSearch} onChange={event=>setCandidatePickerSearch(event.target.value)} placeholder="Tìm theo tên hoặc ngành…"/></label><div className="candidate-picker-count">Đã chọn <b>{candidatePickerSelected.length}</b> / {rosterMembers.length} HDT · cần ít nhất {round1Seats} ứng viên để mở vòng 1</div><div className="candidate-picker-list">{filteredCandidateRoster.map(person=><label className="candidate-picker-item" key={person.id}><input type="checkbox" checked={candidatePickerSelected.includes(person.id)} disabled={syncingCandidates} onChange={event=>setCandidatePickerSelected(ids=>event.target.checked?[...ids,person.id]:ids.filter(id=>id!==person.id))}/><span><b>{person.name}</b><small>{person.sector||'Chưa chọn ngành'}</small></span>{candidates.some(candidate=>candidate.id===person.id&&candidate.active!==false)&&<em>Đang là ứng viên</em>}</label>)}{!rosterMembers.length&&<div className="empty-state">Chưa có HDT trong danh sách. Hãy thêm hồ sơ trước.</div>}</div><div className="add-members-actions"><button className="outline-button" onClick={()=>setShowCandidatePicker(false)} disabled={syncingCandidates}>Hủy</button><button className="primary-button" onClick={saveCandidateSelection} disabled={syncingCandidates}>{syncingCandidates?'Đang lưu…':`Lưu ${candidatePickerSelected.length} ứng viên`}</button></div></section></div>}
+    {showAddMembers&&<div className="modal-backdrop"><section className="panel code-modal add-members-modal"><button className="modal-close" onClick={()=>setShowAddMembers(false)} aria-label="Đóng"><X size={18}/></button><div className="admin-icon"><Users size={18}/></div><h2>Thêm Huynh trưởng</h2><div className="member-input-tabs"><button className={memberInputMode==='manual'?'selected':''} onClick={()=>setMemberInputMode('manual')}>Nhập biểu mẫu</button><button className={memberInputMode==='excel'?'selected':''} onClick={()=>setMemberInputMode('excel')}>Import Excel</button></div>{memberInputMode==='manual'?<form className="member-entry-form" onSubmit={addManualMember}><label><span className="member-label-heading">Họ và tên <b>*</b></span><input autoFocus value={memberEntry.name} onChange={event=>setMemberEntry({...memberEntry,name:event.target.value})} placeholder="Ví dụ: Nguyễn Văn An"/></label><label><span className="member-label-heading">Ngành <b>*</b></span><select required value={memberEntry.sector} onChange={event=>setMemberEntry({...memberEntry,sector:event.target.value})}><option value="">Chọn ngành</option>{sectors.map(sector=><option key={sector} value={sector}>{sector}</option>)}</select></label><label>Ngày sinh <span>(không bắt buộc)</span><input type="date" value={memberEntry.birthDate} max={new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok'}).format(new Date())} onChange={event=>setMemberEntry({...memberEntry,birthDate:event.target.value})}/></label><label>Email (không bắt buộc)<input type="email" value={memberEntry.email} onChange={event=>setMemberEntry({...memberEntry,email:event.target.value})} placeholder="ten@example.com"/></label><button className="outline-button" type="submit" disabled={pendingMembers.length>=300}>+ Thêm vào danh sách</button></form>:<div className="member-excel-import"><p>Chọn file Excel <b>.xlsx</b> hoặc CSV. Cột A là họ tên, B là ngành, C là ngày sinh, D là email (không bắt buộc). Ngày sinh có thể để trống. Có thể có dòng tiêu đề.</p><input ref={memberFileRef} type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onChange={importMemberFile} disabled={importingMembers||pendingMembers.length>=300}/><button type="button" className="template-download" onClick={downloadMemberTemplate}>Tải mẫu CSV (mở bằng Excel)</button>{importingMembers&&<small>Đang đọc file…</small>}</div>}{pendingMembers.length>0&&<div className="pending-members"><b>Danh sách chờ thêm ({pendingMembers.length})</b><ul>{pendingMembers.map((person,index)=><li key={`${person.name}-${index}`}><span><b>{person.name}</b><small>{person.sector||'Chưa chọn ngành'}{person.birthDate?` · ${person.birthDate.split('-').reverse().join('/')}`:''}{person.email?` · ${person.email}`:''}</small></span><button type="button" onClick={()=>setPendingMembers(items=>items.filter((_,itemIndex)=>itemIndex!==index))} aria-label={`Xóa ${person.name}`}><X size={15}/></button></li>)}</ul></div>}<small className="member-modal-note">Hồ sơ được lưu vào danh bạ chung. Để bỏ phiếu kỳ này, hãy chọn HDT bằng nút “Chọn cử tri cho kỳ này”. Admin cấp mã riêng sau khi lưu danh sách.</small><div className="add-members-actions"><button className="outline-button" onClick={()=>setShowAddMembers(false)} disabled={savingMembers}>Hủy</button><button className="primary-button" onClick={addMembers} disabled={savingMembers||importingMembers||!pendingMembers.length}>{savingMembers?'Đang lưu…':`Lưu ${pendingMembers.length||''} hồ sơ`}</button></div></section></div>}
+    {showElectionVoterPicker&&<div className="modal-backdrop"><section className="panel candidate-picker-modal"><button className="modal-close" onClick={()=>setShowElectionVoterPicker(false)} aria-label="Đóng"><X size={18}/></button><div className="admin-icon"><Users size={18}/></div><h2>Chọn cử tri cho {election?.term||'kỳ này'}</h2><p>Chọn những HDT được bỏ phiếu trong riêng kỳ này. Danh bạ chung và danh sách các kỳ cũ không bị thay đổi.</p><label className="search-box candidate-picker-search"><Search size={16}/><input value={electionVoterSearch} onChange={event=>setElectionVoterSearch(event.target.value)} placeholder="Tìm theo tên hoặc ngành…"/></label><div className="candidate-picker-count">Đã chọn <b>{electionVoterPickerSelected.length}</b> HDT · tối thiểu {round1Seats} cử tri</div><div className="candidate-picker-list">{filteredElectionVoterDirectory.map(person=><label className="candidate-picker-item" key={person.id}><input type="checkbox" checked={electionVoterPickerSelected.includes(person.id)} disabled={savingElectionVoters} onChange={event=>setElectionVoterPickerSelected(ids=>event.target.checked?[...ids,person.id]:ids.filter(id=>id!==person.id))}/><span><b>{person.name}</b><small>{person.sector||'Chưa chọn ngành'}</small></span>{electionVoterPickerSelected.includes(person.id)&&<em>Được bỏ phiếu kỳ này</em>}</label>)}{!filteredElectionVoterDirectory.length&&<div className="empty-state">Danh bạ chưa có HDT phù hợp. Hãy thêm vào danh bạ trước.</div>}</div><div className="add-members-actions"><button className="outline-button" onClick={()=>setShowElectionVoterPicker(false)} disabled={savingElectionVoters}>Hủy</button><button className="primary-button" onClick={saveElectionVoters} disabled={savingElectionVoters}>{savingElectionVoters?'Đang lưu…':`Lưu ${electionVoterPickerSelected.length} cử tri`}</button></div></section></div>}
+    {showCandidatePicker&&<div className="modal-backdrop"><section className="panel candidate-picker-modal"><button className="modal-close" onClick={()=>setShowCandidatePicker(false)} aria-label="Đóng"><X size={18}/></button><div className="admin-icon"><Users size={18}/></div><h2>Chọn HDT đủ điều kiện ứng cử</h2><p>Chọn riêng những người được tham gia vòng 1. Danh sách HDT chung không bị thay đổi; những người không chọn sẽ không xuất hiện trong lá phiếu của kỳ này.</p><label className="search-box candidate-picker-search"><Search size={16}/><input value={candidatePickerSearch} onChange={event=>setCandidatePickerSearch(event.target.value)} placeholder="Tìm theo tên hoặc ngành…"/></label><div className="candidate-picker-count">Đã chọn <b>{candidatePickerSelected.length}</b> / {electionRosterMembers.length} HDT · cần ít nhất {round1Seats} ứng viên để mở vòng 1</div><div className="candidate-picker-list">{filteredCandidateRoster.map(person=><label className="candidate-picker-item" key={person.id}><input type="checkbox" checked={candidatePickerSelected.includes(person.id)} disabled={syncingCandidates} onChange={event=>setCandidatePickerSelected(ids=>event.target.checked?[...ids,person.id]:ids.filter(id=>id!==person.id))}/><span><b>{person.name}</b><small>{person.sector||'Chưa chọn ngành'}</small></span>{candidates.some(candidate=>candidate.id===person.id&&candidate.active!==false)&&<em>Đang là ứng viên</em>}</label>)}{!electionRosterMembers.length&&<div className="empty-state">Kỳ này chưa có cử tri. Hãy chọn cử tri trước.</div>}</div><div className="add-members-actions"><button className="outline-button" onClick={()=>setShowCandidatePicker(false)} disabled={syncingCandidates}>Hủy</button><button className="primary-button" onClick={saveCandidateSelection} disabled={syncingCandidates}>{syncingCandidates?'Đang lưu…':`Lưu ${candidatePickerSelected.length} ứng viên`}</button></div></section></div>}
     {issuedCodes.length>0&&<div className="modal-backdrop"><section className="panel code-modal issued-codes-modal"><button className="modal-close" onClick={()=>setIssuedCodes([])} aria-label="Đóng"><X size={18}/></button><div className="admin-icon"><ShieldCheck size={18}/></div><h2>{issuedCodes.length===1?`Mã đăng nhập của ${issuedCodes[0].person.name}`:`Đã cấp ${issuedCodes.length} mã đăng nhập`}</h2><p>Các mã chỉ hiện lần này, mỗi mã dùng một lần và hết hạn lúc {new Intl.DateTimeFormat('vi-VN',{timeZone:'Asia/Bangkok',dateStyle:'short',timeStyle:'short'}).format(issuedCodes[0].expiresAt.toDate())}.</p><div className="issued-codes-list"><p>Không gửi toàn bộ danh sách vào nhóm chung. Hãy gửi riêng mã của từng người.</p><ul>{issuedCodes.map(item=><li key={item.person.id}><span><b>{item.person.name}</b><small>{item.person.sector}</small></span><code>{item.code}</code><button onClick={()=>copyOneIssuedCode(item)}><Copy size={14}/> Sao chép</button></li>)}</ul></div><div className="issued-codes-actions"><button className="outline-button" onClick={copyIssuedCodes}><Copy size={15}/> Sao chép danh sách</button><button className="primary-button" onClick={downloadIssuedCodes}><Download size={15}/> Tải CSV</button><button className="outline-button" onClick={()=>setIssuedCodes([])}>Đóng</button></div></section></div>}
     {notice&&<div className="toast"><span><Check size={15}/></span>{notice}<button onClick={()=>setNotice('')}><X size={15}/></button></div>}
   </div>
